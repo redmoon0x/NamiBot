@@ -299,17 +299,18 @@ async def add_superuser(event):
 
     if event.is_reply:
         reply = await event.get_reply_message()
-        new_user_id = reply.sender_id
-        new_username = reply.sender.username
+        new_user_id = reply.forward.from_id if reply.forward else reply.sender_id
+        new_user = await client.get_entity(new_user_id)
+        new_username = new_user.username or f"User{new_user_id}"
 
         if new_user_id in special_users:
             await event.respond(f"User {new_username} is already a super user.")
         else:
             special_users[new_user_id] = new_username
-            await event.respond(f"✅ User {new_username} has been added as a super user.")
+            await event.respond(f"✅ User {new_username} (ID: {new_user_id}) has been added as a super user.")
             print(f"Admin added {new_username} ({new_user_id}) as a super user.")
     else:
-        await event.respond("Please reply to a message from the user you want to promote.")
+        await event.respond("Please forward a message from the user you want to promote and reply to it with /addsuperuser")
 
 @client.on(events.NewMessage(pattern='/removesuperuser'))
 async def remove_superuser(event):
@@ -319,15 +320,19 @@ async def remove_superuser(event):
 
     if event.is_reply:
         reply = await event.get_reply_message()
-        user_id = reply.sender_id
+        user_id = reply.forward.from_id if reply.forward else reply.sender_id
+        user = await client.get_entity(user_id)
+        username = user.username or f"User{user_id}"
 
         if user_id in special_users:
             del special_users[user_id]
-            await event.respond(f"✅ User has been removed from super users.")
+            await event.respond(f"✅ User {username} (ID: {user_id}) has been removed from super users.")
         else:
-            await event.respond("This user is not a super user.")
+            await event.respond(f"User {username} (ID: {user_id}) is not a super user.")
     else:
-        await event.respond("Please reply to a message from the user you want to remove from super users.")
+        await event.respond("Please forward a message from the user you want to remove from super users and reply to it with /removesuperuser")
+
+
 
 @client.on(events.NewMessage(pattern='/listsuperusers'))
 async def list_superusers(event):
