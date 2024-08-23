@@ -1,9 +1,10 @@
 import time
 from flask import Flask, request
-import bot
+import bot  # Assuming you have a bot.py module
 import asyncio
 import os
-from telethon import events, types, functions
+from telethon import events, types
+import requests  # For making HTTP requests
 
 app = Flask(__name__)
 
@@ -36,7 +37,7 @@ async def handle_update(update):
     else:
         return
     
-    event._set_client(bot_module.client)
+    event._set_client(bot.client)
     event.message = types.Message(
         id=event.id,
         to_id=types.PeerUser(event.sender_id),
@@ -63,21 +64,24 @@ async def handle_update(update):
             "Sorry for the delay! I might have been asleep. I'm awake now and ready to help!🫡🤗"
         )
 
-async def set_webhook():
+def set_webhook():
     webhook_url = f"{os.environ.get('RENDER_EXTERNAL_URL', 'https://namibot.onrender.com')}/webhook"
-    await bot.client(functions.bots.SetBotWebhookRequest(
-        url=webhook_url,
-        drop_pending_updates=True
-    ))
-    print(f"Webhook set to {webhook_url}")
+    response = requests.post(
+        f'https://api.telegram.org/bot{bot.bot_token}/setWebhook',
+        json={'url': webhook_url}
+    )
+    if response.status_code == 200:
+        print(f"Webhook set to {webhook_url}")
+    else:
+        print(f"Error setting webhook: {response.text}")
 
 async def send_startup_notification():
-    await bot_module.client.send_message(bot.log_channel_id, "Bot has started up!")
+    await bot.client.send_message(bot.log_channel_id, "Bot has started up!")
 
 if __name__ == '__main__':
-    # Set the webhook and send startup notification when the app starts
+    # Set the webhook
+    set_webhook() 
     with bot.client:
-        bot.client.loop.run_until_complete(set_webhook())
         bot.client.loop.run_until_complete(send_startup_notification())
     
     # Run the Flask app
