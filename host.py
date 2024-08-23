@@ -8,7 +8,7 @@ from telethon import events, types, functions
 app = Flask(__name__)
 
 # Initialize the bot
-bot.client.start(bot_token=bot_module.bot_token)
+bot.client.start(bot_token=bot.bot_token)
 
 @app.route('/')
 def home():
