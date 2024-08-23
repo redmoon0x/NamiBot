@@ -3,6 +3,8 @@ from flask import Flask, request
 import asyncio
 import os
 from telethon import events, types, Button
+from telethon import TelegramClient
+
 from telethon.errors import FloodWaitError, MessageTooLongError, ChatIdInvalidError
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
