@@ -31,36 +31,31 @@ async def handle_update(update):
     start_time = time.time()
     
     if 'message' in update:
-        event = events.NewMessage.Event(update['message'])
-        # Access the peer_id correctly 
-        event.chat_id = update['message']['chat']['id']  # Correctly get chat ID
-        event.sender_id = update['message']['from']['id']  # Correctly get sender ID
+        message = update['message']
+        event = events.NewMessage.Event(types.Message(
+            id=message['message_id'],
+            to_id=types.PeerChat(message['chat']['id']),
+            message=message.get('text', ''),
+            date=message['date'],
+            from_id=types.PeerUser(message['from']['id']),
+        ))
+        event.chat_id = message['chat']['id']
+        event.sender_id = message['from']['id']
     elif 'callback_query' in update:
-        event = events.CallbackQuery.Event(update['callback_query'])
-        # Access the peer_id correctly 
-        event.chat_id = update['callback_query']['message']['chat']['id'] 
-        event.sender_id = update['callback_query']['from']['id']
+        callback_query = update['callback_query']
+        event = events.CallbackQuery.Event(types.UpdateBotCallbackQuery(
+            query_id=int(callback_query['id']),
+            user_id=callback_query['from']['id'],
+            peer=types.PeerChat(callback_query['message']['chat']['id']),
+            msg_id=callback_query['message']['message_id'],
+            data=callback_query.get('data', b''),
+        ))
+        event.chat_id = callback_query['message']['chat']['id']
+        event.sender_id = callback_query['from']['id']
     else:
         return
     
     event._set_client(bot.client)
-    event.message = types.Message(
-        id=event.id,
-        to_id=types.PeerUser(event.sender_id),
-        message=event.text,
-        date=event.date,
-        out=False,
-        mentioned=False,
-        media_unread=False,
-        silent=False,
-        post=False,
-        from_scheduled=False,
-        legacy=False,
-        edit_hide=False,
-        pinned=False,
-        from_id=types.PeerUser(event.sender_id),
-    )
-
     await bot.client._dispatch_event(event)
     
     process_time = time.time() - start_time
@@ -87,6 +82,8 @@ async def send_startup_notification():
 if __name__ == '__main__':
     # Set the webhook
     set_webhook() 
+    
+    # Send startup notification
     with bot.client:
         bot.client.loop.run_until_complete(send_startup_notification())
     
