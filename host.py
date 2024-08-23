@@ -1,8 +1,8 @@
 from flask import Flask, request
-import bot
+import bot_module
 import asyncio
 import os
-from telethon import events, types
+from telethon import events, types, functions
 
 app = Flask(__name__)
 
@@ -49,6 +49,19 @@ async def handle_update(update):
 
     await bot_module.client._dispatch_event(event)
 
+async def set_webhook():
+    webhook_url = f"{os.environ.get('RENDER_EXTERNAL_URL', 'http://localhost:10000')}/webhook"
+    await bot_module.client(functions.bots.SetBotWebhookRequest(
+        url=webhook_url,
+        drop_pending_updates=True
+    ))
+    print(f"Webhook set to {webhook_url}")
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
+    # Set the webhook when the app starts
+    with bot_module.client:
+        bot_module.client.loop.run_until_complete(set_webhook())
+    
+    # Run the Flask app
+    port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
