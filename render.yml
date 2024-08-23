@@ -1,7 +1,12 @@
 services:
+    
   - type: web
     name: telegram-bot
+    port: 3000
     env: python
+    env:
+      - key: PORT
+        value: "3000"
     buildCommand: pip install -r requirements.txt
     startCommand: python host.py
     envVars:
@@ -15,3 +20,6 @@ services:
         sync: false
       - key: LOG_CHANNEL_ID
         sync: false
+
+     
+    
