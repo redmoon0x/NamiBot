@@ -32,8 +32,14 @@ async def handle_update(update):
     
     if 'message' in update:
         event = events.NewMessage.Event(update['message'])
+        # Access the peer_id correctly 
+        event.chat_id = update['message']['chat']['id']  # Correctly get chat ID
+        event.sender_id = update['message']['from']['id']  # Correctly get sender ID
     elif 'callback_query' in update:
         event = events.CallbackQuery.Event(update['callback_query'])
+        # Access the peer_id correctly 
+        event.chat_id = update['callback_query']['message']['chat']['id'] 
+        event.sender_id = update['callback_query']['from']['id']
     else:
         return
     
