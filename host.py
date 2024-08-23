@@ -64,7 +64,7 @@ async def handle_update(update):
         )
 
 async def set_webhook():
-    webhook_url = f"{os.environ.get('RENDER_EXTERNAL_URL', 'http://localhost:10000')}/webhook"
+    webhook_url = f"{os.environ.get('RENDER_EXTERNAL_URL', 'https://namibot.onrender.com')}/webhook"
     await bot_module.client(functions.bots.SetBotWebhookRequest(
         url=webhook_url,
         drop_pending_updates=True
