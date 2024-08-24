@@ -1,15 +1,14 @@
 from telethon import TelegramClient, events, Button
 import aiohttp
-from bs4 import BeautifulSoup
 import os
 import hashlib
 from collections import defaultdict
 import asyncio
-import random
-import time
 from telethon.errors import FloodWaitError, MessageTooLongError, ChatIdInvalidError
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from pydantic import BaseModel
+from typing import List, Dict
 
 load_dotenv()
 
@@ -27,77 +26,52 @@ api_hash = get_env('TELEGRAM_API_HASH')
 bot_token = get_env('TELEGRAM_BOT_TOKEN')
 storage_group_id = get_env('STORAGE_GROUP_ID', convert=int)
 log_channel_id = get_env('LOG_CHANNEL_ID', convert=int)
+PDF_SCRAPER_URL = get_env('PDF_SCRAPER_URL', 'http://localhost:8000')
 
 client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 
-url_cache = defaultdict(dict)
-user_cooldowns = {}
+url_cache: Dict[int, Dict[str, Dict[str, str]]] = defaultdict(dict)
+user_cooldowns: Dict[int, datetime] = {}
 
-# Define special users by their Telegram IDs or usernames
 special_users = {
     1502110448: "Deviprasad Shetty",
     5792840252: "Abhiiiiiiiiii",
     1669299995: "Ravina Mam"
 }
 
-# Define admin users
-admin_users = {1502110448}  # Add admin user IDs here
+admin_users = {1502110448}
 
-# Track search usage for non-special users
 search_tracker = defaultdict(lambda: {'count': 0, 'last_search_time': None})
 SEARCH_LIMIT = 2
 RESET_TIME_HOURS = 2
 
-async def global_pdf_search(query, num_results=10, retries=3, backoff_factor=1):
-    search_url = f"https://www.google.com/search?q=filetype:pdf+{query}"
-    return await perform_search(search_url, num_results, retries, backoff_factor)
+all_user_ids = set()
 
-async def archive_pdf_search(query, num_results=10, retries=3, backoff_factor=1):
-    search_url = f"https://www.google.com/search?q=site:archive.org+filetype:pdf+{query}"
-    return await perform_search(search_url, num_results, retries, backoff_factor)
+class SearchResult(BaseModel):
+    title: str
+    url: str
 
-async def perform_search(search_url, num_results, retries, backoff_factor):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
+class SearchResponse(BaseModel):
+    global_results: List[SearchResult]
+    archive_results: List[SearchResult]
 
-    for attempt in range(retries):
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(search_url, headers=headers) as response:
-                    if response.status == 200:
-                        soup = BeautifulSoup(await response.text(), 'html.parser')
-                        results = []
-                        for g in soup.find_all('div', class_='g'):
-                            link = g.find('a', href=True)
-                            title = g.find('h3')
-                            if link and title:
-                                href = link['href']
-                                url = href.split("&")[0].split("?q=")[-1]
-                                results.append((title.text, url))
-                        return results[:num_results]
-                    elif response.status == 429:
-                        raise Exception("Rate limit exceeded")
-                    else:
-                        raise Exception(f"Unexpected response status: {response.status}")
-        except Exception as e:
-            if attempt < retries - 1:
-                sleep_time = backoff_factor * (2 ** attempt) + random.uniform(0, 1)
-                print(f"Attempt {attempt + 1} failed: {str(e)}. Retrying in {sleep_time:.2f} seconds...")
-                await asyncio.sleep(sleep_time)
+async def perform_pdf_search(query: str, num_results: int = 10) -> SearchResponse:
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{PDF_SCRAPER_URL}/search", json={"query": query, "num_results": num_results}) as response:
+            if response.status == 200:
+                return SearchResponse(**await response.json())
             else:
-                print(f"All {retries} attempts failed. Giving up.")
-                return []
+                raise Exception(f"Error from PDF scraper service: {response.status}")
 
 async def send_results_page(event, global_results, archive_results, page, query):
     buttons = []
     results = global_results if page == 0 else archive_results
     
-    for title, url in results:
-        url_hash = hashlib.md5(url.encode()).hexdigest()
-        url_cache[event.chat_id][url_hash] = {'title': title, 'url': url}
+    for result in results:
+        url_hash = hashlib.md5(result.url.encode()).hexdigest()
+        url_cache[event.chat_id][url_hash] = {'title': result.title, 'url': result.url}
         
-        truncated_title = title[:47] + "..." if len(title) > 50 else title
+        truncated_title = result.title[:47] + "..." if len(result.title) > 50 else result.title
         buttons.append([Button.inline(f"📚 {truncated_title}", f"pdf:{url_hash}")])
     
     nav_buttons = []
@@ -141,7 +115,7 @@ async def handle_message(event):
         if user_data['count'] >= SEARCH_LIMIT:
             time_remaining = timedelta(hours=RESET_TIME_HOURS) - elapsed_time
             hours, remainder = divmod(time_remaining.seconds, 3600)
-            minutes, seconds = divmod(remainder, 60)
+            minutes, _ = divmod(remainder, 60)
             await event.respond(f"⏳ You have reached your search limit. Please try again in {hours}h {minutes}m.")
             return
         else:
@@ -151,11 +125,10 @@ async def handle_message(event):
     await event.respond("Searching for PDFs, please wait...")
     
     try:
-        global_results = await global_pdf_search(query)
-        archive_results = await archive_pdf_search(query)
+        search_response = await perform_pdf_search(query)
         
-        if global_results or archive_results:
-            await send_results_page(event, global_results, archive_results, 0, query)
+        if search_response.global_results or search_response.archive_results:
+            await send_results_page(event, search_response.global_results, search_response.archive_results, 0, query)
         else:
             await event.respond("Sorry, I couldn't find any PDFs related to that query. 😔")
     except Exception as e:
@@ -207,9 +180,8 @@ async def callback_query_handler(event):
     elif data.startswith("next_page:") or data.startswith("prev_page:"):
         page = 1 if data.startswith("next_page:") else 0
         query = data.split(':', 1)[1]
-        global_results = await global_pdf_search(query)
-        archive_results = await archive_pdf_search(query)
-        await send_results_page(event, global_results, archive_results, page, query)
+        search_response = await perform_pdf_search(query)
+        await send_results_page(event, search_response.global_results, search_response.archive_results, page, query)
 
     elif data.startswith("pdf:"):
         await handle_pdf_request(event)
