@@ -1,33 +1,35 @@
-import time
-from flask import Flask, request
-import asyncio
+from telethon import TelegramClient, events, Button
+import aiohttp
+from bs4 import BeautifulSoup
 import os
-from telethon import events, types, Button
-from telethon import TelegramClient
-
+import hashlib
+from collections import defaultdict
+import asyncio
+import random
+import time
 from telethon.errors import FloodWaitError, MessageTooLongError, ChatIdInvalidError
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-import requests
-from bs4 import BeautifulSoup
-import hashlib
-import aiohttp
-from collections import defaultdict
-import random
 
 load_dotenv()
 
-# --- Environment Variables ---
-api_id = int(os.getenv("TELEGRAM_API_ID"))
-api_hash = os.getenv("TELEGRAM_API_HASH")
-bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-storage_group_id = int(os.getenv("STORAGE_GROUP_ID"))
-log_channel_id = int(os.getenv("LOG_CHANNEL_ID"))
+def get_env(key, default=None, convert=str):
+    value = os.getenv(key, default)
+    if value is None:
+        raise ValueError(f"Environment variable {key} is not set")
+    try:
+        return convert(value)
+    except ValueError:
+        raise ValueError(f"Failed to convert {key}={value} to {convert.__name__}")
 
-# --- Telethon Client ---
+api_id = get_env('TELEGRAM_API_ID', convert=int)
+api_hash = get_env('TELEGRAM_API_HASH')
+bot_token = get_env('TELEGRAM_BOT_TOKEN')
+storage_group_id = get_env('STORAGE_GROUP_ID', convert=int)
+log_channel_id = get_env('LOG_CHANNEL_ID', convert=int)
+
 client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 
-# --- Global Variables ---
 url_cache = defaultdict(dict)
 user_cooldowns = {}
 
@@ -46,10 +48,6 @@ search_tracker = defaultdict(lambda: {'count': 0, 'last_search_time': None})
 SEARCH_LIMIT = 2
 RESET_TIME_HOURS = 2
 
-# --- Flask App ---
-app = Flask(__name__)
-
-# --- Functions ---
 async def global_pdf_search(query, num_results=10, retries=3, backoff_factor=1):
     search_url = f"https://www.google.com/search?q=filetype:pdf+{query}"
     return await perform_search(search_url, num_results, retries, backoff_factor)
@@ -301,18 +299,17 @@ async def add_superuser(event):
 
     if event.is_reply:
         reply = await event.get_reply_message()
-        new_user_id = reply.forward.from_id if reply.forward else reply.sender_id
-        new_user = await client.get_entity(new_user_id)
-        new_username = new_user.username or f"User{new_user_id}"
+        new_user_id = reply.sender_id
+        new_username = reply.sender.username
 
         if new_user_id in special_users:
             await event.respond(f"User {new_username} is already a super user.")
         else:
             special_users[new_user_id] = new_username
-            await event.respond(f"✅ User {new_username} (ID: {new_user_id}) has been added as a super user.")
+            await event.respond(f"✅ User {new_username} has been added as a super user.")
             print(f"Admin added {new_username} ({new_user_id}) as a super user.")
     else:
-        await event.respond("Please forward a message from the user you want to promote and reply to it with /addsuperuser")
+        await event.respond("Please reply to a message from the user you want to promote.")
 
 @client.on(events.NewMessage(pattern='/removesuperuser'))
 async def remove_superuser(event):
@@ -322,19 +319,15 @@ async def remove_superuser(event):
 
     if event.is_reply:
         reply = await event.get_reply_message()
-        user_id = reply.forward.from_id if reply.forward else reply.sender_id
-        user = await client.get_entity(user_id)
-        username = user.username or f"User{user_id}"
+        user_id = reply.sender_id
 
         if user_id in special_users:
             del special_users[user_id]
-            await event.respond(f"✅ User {username} (ID: {user_id}) has been removed from super users.")
+            await event.respond(f"✅ User has been removed from super users.")
         else:
-            await event.respond(f"User {username} (ID: {user_id}) is not a super user.")
+            await event.respond("This user is not a super user.")
     else:
-        await event.respond("Please forward a message from the user you want to remove from super users and reply to it with /removesuperuser")
-
-
+        await event.respond("Please reply to a message from the user you want to remove from super users.")
 
 @client.on(events.NewMessage(pattern='/listsuperusers'))
 async def list_superusers(event):
@@ -427,77 +420,9 @@ async def stats(event):
 
     await event.respond(stats_message)
 
-# --- Webhook Routes ---
+def main():
+    print("Bot is starting...")
+    client.run_until_disconnected()
 
-@app.route('/', methods=['GET'])
-def home():
-    return "Bot is running!"
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if request.method == 'POST':
-        update = request.json
-        asyncio.run(handle_update(update))
-        return 'OK', 200
-    return 'OK', 200
-
-@app.route('/keepalive')
-def keepalive():
-    return "I'm alive!", 200
-
-async def handle_update(update):
-    if 'message' in update:
-        event = events.NewMessage.Event(update['message'])
-        event.chat_id = update['message']['chat']['id']
-        event.sender_id = update['message']['from']['id']
-    elif 'callback_query' in update:
-        event = events.CallbackQuery.Event(update['callback_query'])
-        event.chat_id = update['callback_query']['message']['chat']['id']
-        event.sender_id = update['callback_query']['from']['id']
-    else:
-        return
-
-    event._set_client(client)
-    event.message = types.Message(
-        id=event.id,
-        to_id=types.PeerUser(event.sender_id),
-        message=event.text,
-        date=event.date,
-        out=False,
-        mentioned=False,
-        media_unread=False,
-        silent=False,
-        post=False,
-        from_scheduled=False,
-        legacy=False,
-        edit_hide=False,
-        pinned=False,
-        from_id=types.PeerUser(event.sender_id),
-    )
-
-    await client._dispatch_event(event)
-
-def set_webhook():
-    webhook_url = f"{os.environ.get('RENDER_EXTERNAL_URL', 'https://namibot.onrender.com')}/webhook"
-    response = requests.post(
-        f'https://api.telegram.org/bot{bot_token}/setWebhook',
-        json={'url': webhook_url}
-    )
-    if response.status_code == 200:
-        print(f"Webhook set to {webhook_url}")
-    else:
-        print(f"Error setting webhook: {response.text}")
-
-async def send_startup_notification():
-    await client.send_message(log_channel_id, "Bot has started up!")
-
-# --- Main Function ---
 if __name__ == '__main__':
-    # Start the bot and set the webhook
-    set_webhook()
-    with client:
-        client.loop.run_until_complete(send_startup_notification())
-
-    # Run the Flask app
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    main()
