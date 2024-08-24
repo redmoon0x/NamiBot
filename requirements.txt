@@ -1,6 +1,5 @@
-flask
-telethon
-python-dotenv
 aiohttp
 beautifulsoup4
-requests
+python-dotenv
+pydantic
+telethon
