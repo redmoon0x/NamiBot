@@ -26,7 +26,7 @@ api_hash = get_env('TELEGRAM_API_HASH')
 bot_token = get_env('TELEGRAM_BOT_TOKEN')
 storage_group_id = get_env('STORAGE_GROUP_ID', convert=int)
 log_channel_id = get_env('LOG_CHANNEL_ID', convert=int)
-PDF_SCRAPER_URL = get_env('PDF_SCRAPER_URL', 'http://localhost:8000')
+PDF_SCRAPER_URL = get_env('PDF_SCRAPER_URL', 'https://namiapi.onrender.com')
 
 client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 
