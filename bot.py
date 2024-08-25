@@ -212,7 +212,9 @@ async def handle_pdf_request(call):
             title, url = pdf_info['title'], pdf_info['url']
             
             try:
+                message = await client.send_message(call.chat_id, f"Sending: {title}\nPlease wait...")
                 await client.send_file(call.chat_id, url, caption=f"{title}\n\nSource: {url}")
+                await message.delete()
                 await call.answer("PDF sent successfully!")
                 success = True
             except ChatIdInvalidError:
@@ -223,7 +225,11 @@ async def handle_pdf_request(call):
                 await asyncio.sleep(e.seconds)
                 success = False
             except Exception as e:
-                await call.answer("An error occurred while sending the PDF. Please try again later.")
+                error_message = (
+                    "I'm sorry, I couldn't send the PDF. This can happen sometimes due to server issues. "
+                    "Please try searching again. If the problem persists, wait a few minutes before trying once more."
+                )
+                await client.send_message(call.chat_id, error_message)
                 print(f"Error in sending file to user: {str(e)}")
                 success = False
             
@@ -273,15 +279,20 @@ async def add_superuser(event):
         reply = await event.get_reply_message()
         new_user_id = reply.sender_id
         new_username = reply.sender.username
-
-        if new_user_id in special_users:
-            await event.respond(f"User {new_username} is already a super user.")
-        else:
-            special_users[new_user_id] = new_username
-            await event.respond(f"✅ User {new_username} has been added as a super user.")
-            print(f"Admin added {new_username} ({new_user_id}) as a super user.")
+    elif event.message.forward:
+        forward = event.message.forward
+        new_user_id = forward.sender_id
+        new_username = forward.sender.username if forward.sender else "Unknown"
     else:
-        await event.respond("Please reply to a message from the user you want to promote.")
+        await event.respond("Please reply to or forward a message from the user you want to promote.")
+        return
+
+    if new_user_id in special_users:
+        await event.respond(f"User {new_username} is already a super user.")
+    else:
+        special_users[new_user_id] = new_username
+        await event.respond(f"✅ User {new_username} (ID: {new_user_id}) has been added as a super user.")
+        print(f"Admin added {new_username} ({new_user_id}) as a super user.")
 
 @client.on(events.NewMessage(pattern='/removesuperuser'))
 async def remove_superuser(event):
