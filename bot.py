@@ -212,11 +212,30 @@ async def handle_pdf_request(call):
             title, url = pdf_info['title'], pdf_info['url']
             
             try:
-                message = await client.send_message(call.chat_id, f"Sending: {title}\nPlease wait...")
-                await client.send_file(call.chat_id, url, caption=f"{title}\n\nSource: {url}")
-                await message.delete()
-                await call.answer("PDF sent successfully!")
-                success = True
+                message = await client.send_message(call.chat_id, f"Downloading: {title}\nPlease wait...")
+                
+                # Download the file
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            content = await response.read()
+                            
+                            # Upload the file to Telegram servers
+                            file = await client.upload_file(content, file_name=f"{title}.pdf")
+                            
+                            # Send the file
+                            await client.send_file(
+                                call.chat_id,
+                                file,
+                                caption=f"{title}\n\nSource: {url}",
+                                force_document=True
+                            )
+                            await message.delete()
+                            await call.answer("PDF sent successfully!")
+                            success = True
+                        else:
+                            raise Exception(f"Failed to download PDF: HTTP {response.status}")
+                
             except ChatIdInvalidError:
                 await call.answer("Failed to send the PDF. Please start a chat with the bot first.")
                 success = False
@@ -237,7 +256,7 @@ async def handle_pdf_request(call):
             
             if success:
                 try:
-                    await client.send_file(storage_group_id, url, caption=f"{title}\n\nSource: {url}")
+                    await client.send_file(storage_group_id, file, caption=f"{title}\n\nSource: {url}")
                 except Exception as e:
                     print(f"Failed to send to storage group: {str(e)}")
             
@@ -279,12 +298,16 @@ async def add_superuser(event):
         reply = await event.get_reply_message()
         new_user_id = reply.sender_id
         new_username = reply.sender.username
-    elif event.message.forward:
-        forward = event.message.forward
-        new_user_id = forward.sender_id
-        new_username = forward.sender.username if forward.sender else "Unknown"
+    elif event.message.fwd_from:
+        fwd = event.message.fwd_from
+        new_user_id = fwd.from_id.user_id if fwd.from_id else None
+        new_username = fwd.from_name if fwd.from_name else "Unknown"
     else:
         await event.respond("Please reply to or forward a message from the user you want to promote.")
+        return
+
+    if not new_user_id:
+        await event.respond("Unable to identify the user. Please try again.")
         return
 
     if new_user_id in special_users:
@@ -311,6 +334,8 @@ async def remove_superuser(event):
             await event.respond("This user is not a super user.")
     else:
         await event.respond("Please reply to a message from the user you want to remove from super users.")
+
+
 
 @client.on(events.NewMessage(pattern='/listsuperusers'))
 async def list_superusers(event):
