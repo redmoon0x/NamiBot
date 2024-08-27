@@ -226,6 +226,8 @@ async def callback_query_handler(event):
         print("Received unknown callback data:", data)
         await event.answer("Something went wrong, please try again.")
 
+from telethon.tl.types import InputDocumentFileLocation
+
 async def handle_pdf_request(call):
     user_id = call.sender_id
     current_time = datetime.now()
@@ -252,32 +254,22 @@ async def handle_pdf_request(call):
         if pdf_info:
             title, url = pdf_info
             
-            status_message = await client.send_message(call.chat_id, f"Fetching: {title}\nPlease wait...")
+            status_message = await client.send_message(call.chat_id, f"Sending: {title}\nPlease wait...")
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        content = await response.read()
-                        file_size = len(content)
-                        
-                        await status_message.edit(f"Sending: {title}")
-                        
-                        # Use send_file even for large files with progress_callback
-                        file = BytesIO(content)
-                        file.name = f"{title}.pdf"
-                        await client.send_file(
-                            entity=InputPeerUser(call.sender_id, 0),
-                            file=file,
-                            caption=f"{title}\n\nSource: {url}",
-                            force_document=True,
-                            progress_callback=lambda c, t: asyncio.create_task(progress_callback(status_message, c, t))
-                        )
-                        await status_message.delete()
-                        await call.answer("PDF sent successfully!")
-                        success = True
-                    else:
-                        await status_message.edit(f"Failed to fetch PDF: HTTP {response.status}")
-                        success = False
+            try:
+                await client.send_document(
+                    entity=call.sender_id,
+                    file=url,
+                    caption=f"{title}\n\nSource: {url}",
+                    force_document=True,
+                    progress_callback=lambda c, t: asyncio.create_task(progress_callback(status_message, c, t))
+                )
+                await status_message.delete()
+                await call.answer("PDF sent successfully!")
+                success = True
+            except Exception as e:
+                await status_message.edit(f"Failed to send PDF: {str(e)}")
+                success = False
             
             await log_pdf_request(await client.get_entity(call.sender_id), pdf_info, success)
             
