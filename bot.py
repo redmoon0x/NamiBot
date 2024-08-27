@@ -190,13 +190,19 @@ async def callback_query_handler(event):
         print("Received unknown callback data:", data)
         await event.answer("Something went wrong, please try again.")
 
+import aiohttp
+import asyncio
+from telethon import types
+from telethon.tl.types import InputPeerUser
+from io import BytesIO
+
 async def handle_pdf_request(call):
     user_id = call.sender_id
     current_time = datetime.now()
 
     if user_id in user_cooldowns:
         time_diff = current_time - user_cooldowns[user_id]
-        if time_diff.total_seconds() < 60:  # 1 minute cooldown
+        if time_diff.total_seconds() < 60:
             remaining_time = 60 - int(time_diff.total_seconds())
             await call.answer(f"Please wait {remaining_time} seconds before requesting another PDF.")
             return
@@ -204,67 +210,43 @@ async def handle_pdf_request(call):
     user_cooldowns[user_id] = current_time
 
     try:
-        user = await client.get_entity(call.sender_id)
         url_hash = call.data.decode().split(':')[1]
         pdf_info = url_cache[call.chat_id].get(url_hash)
         
         if pdf_info:
             title, url = pdf_info['title'], pdf_info['url']
             
-            try:
-                message = await client.send_message(call.chat_id, f"Downloading: {title}\nPlease wait...")
-                
-                # Download the file
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url) as response:
-                        if response.status == 200:
-                            content = await response.read()
-                            
-                            # Upload the file to Telegram servers
-                            file = await client.upload_file(content, file_name=f"{title}.pdf")
-                            
-                            # Send the file
+            status_message = await client.send_message(call.chat_id, f"Fetching: {title}\nPlease wait...")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        content = await response.read()
+                        file_size = len(content)
+                        
+                        await status_message.edit(f"Sending: {title}")
+                        
+                        file = types.InputFile(BytesIO(content), name=f"{title}.pdf", size=file_size)
+                        
+                        try:
                             await client.send_file(
-                                call.chat_id,
-                                file,
+                                entity=InputPeerUser(call.sender_id, 0),
+                                file=file,
                                 caption=f"{title}\n\nSource: {url}",
-                                force_document=True
+                                force_document=True,
+                                progress_callback=lambda c, t: progress_callback(status_message, c, t)
                             )
-                            await message.delete()
+                            await status_message.delete()
                             await call.answer("PDF sent successfully!")
                             success = True
-                        else:
-                            raise Exception(f"Failed to download PDF: HTTP {response.status}")
-                
-            except ChatIdInvalidError:
-                await call.answer("Failed to send the PDF. Please start a chat with the bot first.")
-                success = False
-            except FloodWaitError as e:
-                await call.answer(f"Rate limit exceeded. Please wait for {e.seconds} seconds.")
-                await asyncio.sleep(e.seconds)
-                success = False
-            except Exception as e:
-                error_message = (
-                    "I'm sorry, I couldn't send the PDF. This can happen sometimes due to server issues. "
-                    "Please try searching again. If the problem persists, wait a few minutes before trying once more."
-                )
-                await client.send_message(call.chat_id, error_message)
-                print(f"Error in sending file to user: {str(e)}")
-                success = False
+                        except Exception as e:
+                            await status_message.edit(f"Error sending file: {str(e)}")
+                            success = False
+                    else:
+                        await status_message.edit(f"Failed to fetch PDF: HTTP {response.status}")
+                        success = False
             
-            await log_pdf_request(user, pdf_info, success)
-            
-            if success:
-                try:
-                    await client.send_file(storage_group_id, file, caption=f"{title}\n\nSource: {url}")
-                except Exception as e:
-                    print(f"Failed to send to storage group: {str(e)}")
-            
-            countdown_message = await call.client.send_message(call.chat_id, "You can request another PDF in 60 seconds.")
-            for i in range(59, 0, -1):
-                await asyncio.sleep(1)
-                await countdown_message.edit(f"You can request another PDF in {i} seconds.")
-            await countdown_message.delete()
+            await log_pdf_request(await client.get_entity(call.sender_id), pdf_info, success)
             
             del url_cache[call.chat_id][url_hash]
         else:
@@ -272,6 +254,11 @@ async def handle_pdf_request(call):
     except Exception as e:
         await call.answer("An unexpected error occurred. Please try again.")
         print(f"Error in handle_pdf_request: {str(e)}")
+
+async def progress_callback(message, current, total):
+    percent = int((current / total) * 100)
+    if percent % 10 == 0:  # Update every 10%
+        await message.edit(f"Uploading: {percent}% complete")
 
 async def log_pdf_request(user, pdf_info, success):
     status = "successfully received" if success else "failed to receive"
