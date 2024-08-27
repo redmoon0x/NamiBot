@@ -262,45 +262,22 @@ async def handle_pdf_request(call):
                         
                         await status_message.edit(f"Sending: {title}")
                         
-                        if file_size <= MAX_DIRECT_FILE_SIZE:
-                            # Send directly using send_document
-                            file = BytesIO(content)
-                            file.name = f"{title}.pdf"
-                            await client.send_file(
-                                entity=InputPeerUser(call.sender_id, 0),
-                                file=file,
-                                caption=f"{title}\n\nSource: {url}",
-                                force_document=True,
-                                progress_callback=lambda c, t: asyncio.create_task(progress_callback(status_message, c, t))
-                            )
-                            await status_message.delete()
-                            await call.answer("PDF sent successfully!")
-                            success = True
-                        else:
-                            # Stream the file
-                            await status_message.edit(f"Streaming: {title}")
-                            async with session.get(url) as response:
-                                if response.status == 200:
-                                    async for chunk in response.content.iter_chunked(5*1024 * 1024):  # Adjust chunk size as needed
-                                        try:
-                                            await client.send_file(
-                                                entity=InputPeerUser(call.sender_id, 0),
-                                                file=BytesIO(chunk),
-                                                caption=f"{title}\n\nSource: {url}",
-                                                force_document=True,
-                                                progress_callback=lambda c, t: asyncio.create_task(progress_callback(status_message, c, t))
-                                            )
-                                        except Exception as e:
-                                            await status_message.edit(f"Error sending file: {str(e)}")
-                                            success = False
-                                            break
-                                    else:
-                                        await status_message.delete()
-                                        await call.answer("PDF sent successfully!")
-                                        success = True
-                                else:
-                                    await status_message.edit(f"Failed to fetch PDF: HTTP {response.status}")
-                                    success = False
+                        # Use send_file even for large files with progress_callback
+                        file = BytesIO(content)
+                        file.name = f"{title}.pdf"
+                        await client.send_file(
+                            entity=InputPeerUser(call.sender_id, 0),
+                            file=file,
+                            caption=f"{title}\n\nSource: {url}",
+                            force_document=True,
+                            progress_callback=lambda c, t: asyncio.create_task(progress_callback(status_message, c, t))
+                        )
+                        await status_message.delete()
+                        await call.answer("PDF sent successfully!")
+                        success = True
+                    else:
+                        await status_message.edit(f"Failed to fetch PDF: HTTP {response.status}")
+                        success = False
             
             await log_pdf_request(await client.get_entity(call.sender_id), pdf_info, success)
             
@@ -314,7 +291,7 @@ async def handle_pdf_request(call):
 
 async def progress_callback(message, current, total):
     percent = int((current / total) * 100)
-    if percent % 1 == 0:  # Update every 10%
+    if percent % 10 == 0:  # Update every 10%
         await message.edit(f"Uploading: {percent}% complete")
 
 async def log_pdf_request(user, pdf_info, success):
@@ -421,6 +398,7 @@ async def help(event):
         help_message += "/listsuperusers - List all super users\n"
         help_message += "/broadcast - Send a message to all users\n"
         help_message += "/stats - View bot statistics\n"
+        help_message += "/speedtest - Check internet speed (for developer only)\n"
 
     buttons = [
         [Button.inline("🙏 Donate", data="donate")],
