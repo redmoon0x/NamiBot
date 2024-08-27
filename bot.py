@@ -281,7 +281,7 @@ async def handle_pdf_request(call):
                             await status_message.edit(f"Streaming: {title}")
                             async with session.get(url) as response:
                                 if response.status == 200:
-                                    async for chunk in response.content.iter_chunked(1024 * 1024):  # Adjust chunk size as needed
+                                    async for chunk in response.content.iter_chunked(5*1024 * 1024):  # Adjust chunk size as needed
                                         try:
                                             await client.send_file(
                                                 entity=InputPeerUser(call.sender_id, 0),
@@ -314,7 +314,7 @@ async def handle_pdf_request(call):
 
 async def progress_callback(message, current, total):
     percent = int((current / total) * 100)
-    if percent % 10 == 0:  # Update every 10%
+    if percent % 1 == 0:  # Update every 10%
         await message.edit(f"Uploading: {percent}% complete")
 
 async def log_pdf_request(user, pdf_info, success):
@@ -336,63 +336,43 @@ async def log_pdf_request(user, pdf_info, success):
 
 @client.on(events.NewMessage(pattern='/addsuperuser', from_users=DEVELOPER_ID))  # Only admin can use this command
 async def add_superuser(event):
-    await event.respond("Please forward a message from the user you want to promote to super user.")
-    
     try:
-        forwarded_msg = await client.wait_for(events.NewMessage(from_users=event.sender_id, forwarded=True), timeout=60)
-    except asyncio.TimeoutError:
-        await event.respond("Timeout. Please try the command again and forward a message within 60 seconds.")
+        user_id = int(event.message.text.split()[1])
+    except (IndexError, ValueError):
+        await event.respond("Please provide a valid user ID. Usage: /addsuperuser <user_id>")
         return
 
-    if forwarded_msg.forward and forwarded_msg.forward.sender_id:
-        new_user_id = forwarded_msg.forward.sender_id
-        
-        # Ensure the user exists in the database
-        cursor.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (new_user_id,))
-        
-        # Update the user to be a superuser
-        cursor.execute('UPDATE users SET is_super_user = 1 WHERE user_id = ?', (new_user_id,))
-        conn.commit()
-        
-        await event.respond(f"✅ User (ID: {new_user_id}) has been added as a super user.")
-        
-        # Notify the user that they have been promoted to superuser
-        try:
-            await client.send_message(new_user_id, "🎉 Congratulations! You have been promoted to super user status. You now have unlimited searches and additional privileges.")
-        except Exception as e:
-            await event.respond(f"Note: Failed to notify the user. They might have blocked the bot or have privacy settings enabled.")
-    else:
-        await event.respond("Failed to extract user ID from the forwarded message. Please try again.")
+    cursor.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (user_id,))
+    cursor.execute('UPDATE users SET is_super_user = 1 WHERE user_id = ?', (user_id,))
+    conn.commit()
+
+    await event.respond(f"✅ User (ID: {user_id}) has been added as a super user.")
+
+    try:
+        await client.send_message(user_id, "🎉 Congratulations! You have been promoted to super user status. You now have unlimited searches and additional privileges.")
+    except Exception as e:
+        await event.respond(f"Note: Failed to notify the user. They might have blocked the bot or have privacy settings enabled.")
 
 @client.on(events.NewMessage(pattern='/removesuperuser', from_users=DEVELOPER_ID))  # Only admin can use this command
 async def remove_superuser(event):
-    await event.respond("Please forward a message from the user you want to remove from super users.")
-    
     try:
-        forwarded_msg = await client.wait_for(events.NewMessage(from_users=event.sender_id, forwarded=True), timeout=60)
-    except asyncio.TimeoutError:
-        await event.respond("Timeout. Please try the command again and forward a message within 60 seconds.")
+        user_id = int(event.message.text.split()[1])
+    except (IndexError, ValueError):
+        await event.respond("Please provide a valid user ID. Usage: /removesuperuser <user_id>")
         return
 
-    if forwarded_msg.forward and forwarded_msg.forward.sender_id:
-        user_id = forwarded_msg.forward.sender_id
+    cursor.execute('UPDATE users SET is_super_user = 0 WHERE user_id = ?', (user_id,))
+    if cursor.rowcount > 0:
+        conn.commit()
+        await event.respond(f"✅ User (ID: {user_id}) has been removed from super users.")
         
-        # Update the user to remove superuser status
-        cursor.execute('UPDATE users SET is_super_user = 0 WHERE user_id = ?', (user_id,))
-        if cursor.rowcount > 0:
-            conn.commit()
-            await event.respond(f"✅ User (ID: {user_id}) has been removed from super users.")
-            
-            # Notify the user that they have been removed as a superuser
-            try:
-                await client.send_message(user_id, "⚠️ Your super user status has been revoked. You now have limited searches like regular users.")
-            except Exception as e:
-                await event.respond(f"Note: Failed to notify the user. They might have blocked the bot or have privacy settings enabled.")
-        else:
-            await event.respond(f"User (ID: {user_id}) is not a super user.")
+        # Notify the user that they have been removed as a superuser
+        try:
+            await client.send_message(user_id, "⚠️ Your super user status has been revoked. You now have limited searches like regular users.")
+        except Exception as e:
+            await event.respond(f"Note: Failed to notify the user. They might have blocked the bot or have privacy settings enabled.")
     else:
-        await event.respond("Failed to extract user ID from the forwarded message. Please try again.")
-
+        await event.respond(f"User (ID: {user_id}) is not a super user.")
 
 # ... (rest of your code)
 @client.on(events.NewMessage(pattern='/listsuperusers'))
@@ -436,8 +416,8 @@ async def help(event):
 
     if is_admin_user:
         help_message += "\nAdmin Commands:\n"
-        help_message += "/addsuperuser - Add a super user (forward a message from the user)\n"
-        help_message += "/removesuperuser - Remove a super user (forward a message from the user)\n"
+        help_message += "/addsuperuser <user_id> - Add a super user\n"
+        help_message += "/removesuperuser <user_id> - Remove a super user\n"
         help_message += "/listsuperusers - List all super users\n"
         help_message += "/broadcast - Send a message to all users\n"
         help_message += "/stats - View bot statistics\n"
@@ -450,7 +430,7 @@ async def help(event):
     await event.respond(help_message, buttons=buttons)
 
 async def is_admin(user_id):
-    return user_id == 1502110448  # Replace with your admin user ID
+    return user_id == DEVELOPER_ID  # Replace with your admin user ID
 
 @client.on(events.NewMessage(pattern='/broadcast'))
 async def broadcast(event):
@@ -543,6 +523,7 @@ async def speedtest_check(event):
 
 def main():
     print("Bot is starting...")
-    client.run_until_disconnected() 
+    client.run_until_disconnected()
+
 if __name__ == '__main__':
     main()
