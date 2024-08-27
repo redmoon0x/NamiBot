@@ -132,7 +132,7 @@ async def handle_message(event):
     
     is_super_user, search_count, last_search_time = user_data
     
-    if user_id == DEVELOPER_ID:  # Developer has unlimited searches
+    if is_super_user or user_id == DEVELOPER_ID:  # Super users and developer have unlimited searches
         await event.respond("You have unlimited searches. 🚀")
     else:
         now = datetime.now()
@@ -354,7 +354,7 @@ async def add_superuser(event):
         if user_data and user_data[0]:
             await event.respond(f"User (ID: {new_user_id}) is already a super user.")
         else:
-            cursor.execute('INSERT OR REPLACE INTO users (user_id, is_super_user) VALUES (?, 1)', (new_user_id,))
+            cursor.execute('UPDATE users SET is_super_user = 1 WHERE user_id = ?', (new_user_id,))
             conn.commit()
             await event.respond(f"✅ User (ID: {new_user_id}) has been added as a super user.")
             try:
