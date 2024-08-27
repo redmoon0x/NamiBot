@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 from typing import List, Dict
 from collections import defaultdict
+import speedtest
 
 load_dotenv()
 
@@ -505,6 +506,37 @@ async def stats(event):
 @client.on(events.NewMessage)
 async def message_handler(event):
     await handle_message(event)
+
+
+
+@client.on(events.NewMessage(pattern='/speedtest'))
+async def speedtest_check(event):
+    if event.sender_id != DEVELOPER_ID:  # Check if the user is the developer
+        await event.respond("❌ You are not authorized to use this command.")
+        return
+
+    st = speedtest.Speedtest()
+    st.download()
+    st.upload()
+    st.get_best_server()
+    results = st.results.dict()
+
+    # Format the results for better readability
+    formatted_results = {
+        "Download Speed": f"{results['download']} bps ({results['download'] / 1000000:.2f} Mbps)",
+        "Upload Speed": f"{results['upload']} bps ({results['upload'] / 1000000:.2f} Mbps)",
+        "Ping": f"{results['ping']} ms",
+        "Server": results['server']['name'],
+        "Location": f"{results['server']['country']}, {results['server']['sponsor']}" 
+    }
+
+    await event.respond(f"Speedtest Results:\n\n"
+                       f"Download Speed: {formatted_results['Download Speed']}\n"
+                       f"Upload Speed: {formatted_results['Upload Speed']}\n"
+                       f"Ping: {formatted_results['Ping']}\n"
+                       f"Server: {formatted_results['Server']}\n"
+                       f"Location: {formatted_results['Location']}")
+    
 
 def main():
     print("Bot is starting...")
