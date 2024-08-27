@@ -332,12 +332,10 @@ async def log_pdf_request(user, pdf_info, success):
     except Exception as e:
         print(f"Failed to send log message: {str(e)}")
 
-@client.on(events.NewMessage(pattern='/addsuperuser'))
-async def add_superuser(event):
-    if not await is_admin(event.sender_id):
-        await event.respond("❌ You are not authorized to use this command.")
-        return
+# ... (rest of your code)
 
+@client.on(events.NewMessage(pattern='/addsuperuser', from_users=DEVELOPER_ID))  # Only admin can use this command
+async def add_superuser(event):
     await event.respond("Please forward a message from the user you want to promote to super user.")
     
     try:
@@ -364,12 +362,8 @@ async def add_superuser(event):
     else:
         await event.respond("Failed to extract user ID from the forwarded message. Please try again.")
 
-@client.on(events.NewMessage(pattern='/removesuperuser'))
+@client.on(events.NewMessage(pattern='/removesuperuser', from_users=DEVELOPER_ID))  # Only admin can use this command
 async def remove_superuser(event):
-    if not await is_admin(event.sender_id):
-        await event.respond("❌ You are not authorized to use this command.")
-        return
-
     await event.respond("Please forward a message from the user you want to remove from super users.")
     
     try:
@@ -393,6 +387,7 @@ async def remove_superuser(event):
     else:
         await event.respond("Failed to extract user ID from the forwarded message. Please try again.")
 
+# ... (rest of your code)
 @client.on(events.NewMessage(pattern='/listsuperusers'))
 async def list_superusers(event):
     if not await is_admin(event.sender_id):
