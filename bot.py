@@ -1,14 +1,16 @@
-from telethon import TelegramClient, events, Button
-import aiohttp
 import os
 import hashlib
-from collections import defaultdict
 import asyncio
-from telethon.errors import FloodWaitError, MessageTooLongError, ChatIdInvalidError
+import aiohttp
+import sqlite3
+from telethon import TelegramClient, events, Button
+from telethon.tl.types import InputPeerUser
+from io import BytesIO
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 from typing import List, Dict
+from collections import defaultdict
 
 load_dotenv()
 
@@ -30,22 +32,32 @@ PDF_SCRAPER_URL = get_env('PDF_SCRAPER_URL', 'https://namiapi.onrender.com')
 
 client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 
-url_cache: Dict[int, Dict[str, Dict[str, str]]] = defaultdict(dict)
-user_cooldowns: Dict[int, datetime] = {}
+# SQLite setup
+conn = sqlite3.connect('bot_database.db')
+cursor = conn.cursor()
 
-special_users = {
-    1502110448: "Deviprasad Shetty",
-    5792840252: "Abhiiiiiiiiii",
-    1669299995: "Ravina Mam"
-}
+# Create tables
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    is_super_user BOOLEAN DEFAULT 0,
+    search_count INTEGER DEFAULT 0,
+    last_search_time TIMESTAMP,
+    last_pdf_request TIMESTAMP
+)
+''')
 
-admin_users = {1502110448}
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS pdf_cache (
+    chat_id INTEGER,
+    url_hash TEXT,
+    title TEXT,
+    url TEXT,
+    PRIMARY KEY (chat_id, url_hash)
+)
+''')
 
-search_tracker = defaultdict(lambda: {'count': 0, 'last_search_time': None})
-SEARCH_LIMIT = 2
-RESET_TIME_HOURS = 2
-
-all_user_ids = set()
+conn.commit()
 
 class SearchResult(BaseModel):
     title: str
@@ -54,6 +66,10 @@ class SearchResult(BaseModel):
 class SearchResponse(BaseModel):
     global_results: List[SearchResult]
     archive_results: List[SearchResult]
+
+SEARCH_LIMIT = 2
+RESET_TIME_HOURS = 2
+MAX_DIRECT_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
 async def perform_pdf_search(query: str, num_results: int = 10) -> SearchResponse:
     async with aiohttp.ClientSession() as session:
@@ -69,7 +85,11 @@ async def send_results_page(event, global_results, archive_results, page, query)
     
     for result in results:
         url_hash = hashlib.md5(result.url.encode()).hexdigest()
-        url_cache[event.chat_id][url_hash] = {'title': result.title, 'url': result.url}
+        cursor.execute('''
+        INSERT OR REPLACE INTO pdf_cache (chat_id, url_hash, title, url)
+        VALUES (?, ?, ?, ?)
+        ''', (event.chat_id, url_hash, result.title, result.url))
+        conn.commit()
         
         truncated_title = result.title[:47] + "..." if len(result.title) > 50 else result.title
         buttons.append([Button.inline(f"📚 {truncated_title}", f"pdf:{url_hash}")])
@@ -100,27 +120,41 @@ async def handle_message(event):
         await event.respond("Please provide a search term for the PDF.")
         return
     
-    if user_id in special_users or user_id in admin_users:
+    cursor.execute('SELECT is_super_user, search_count, last_search_time FROM users WHERE user_id = ?', (user_id,))
+    user_data = cursor.fetchone()
+    
+    if not user_data:
+        cursor.execute('INSERT INTO users (user_id) VALUES (?)', (user_id,))
+        conn.commit()
+        user_data = (0, 0, None)
+    
+    is_super_user, search_count, last_search_time = user_data
+    
+    if is_super_user:
         await event.respond("You have unlimited searches. 🚀")
     else:
-        user_data = search_tracker[user_id]
         now = datetime.now()
-
-        if user_data['last_search_time']:
-            elapsed_time = now - user_data['last_search_time']
+        if last_search_time:
+            last_search_time = datetime.fromisoformat(last_search_time)
+            elapsed_time = now - last_search_time
             if elapsed_time > timedelta(hours=RESET_TIME_HOURS):
-                search_tracker[user_id]['count'] = 0
-                search_tracker[user_id]['last_search_time'] = None
+                search_count = 0
+                last_search_time = None
 
-        if user_data['count'] >= SEARCH_LIMIT:
+        if search_count >= SEARCH_LIMIT:
             time_remaining = timedelta(hours=RESET_TIME_HOURS) - elapsed_time
             hours, remainder = divmod(time_remaining.seconds, 3600)
             minutes, _ = divmod(remainder, 60)
             await event.respond(f"⏳ You have reached your search limit. Please try again in {hours}h {minutes}m.")
             return
         else:
-            search_tracker[user_id]['count'] += 1
-            search_tracker[user_id]['last_search_time'] = now
+            search_count += 1
+            last_search_time = now
+            cursor.execute('''
+            UPDATE users SET search_count = ?, last_search_time = ?
+            WHERE user_id = ?
+            ''', (search_count, last_search_time.isoformat(), user_id))
+            conn.commit()
 
     await event.respond("Searching for PDFs, please wait...")
     
@@ -138,12 +172,12 @@ async def handle_message(event):
 @client.on(events.NewMessage(pattern='/start'))
 async def start(event):
     user_id = event.sender_id
-    user_name = event.sender.username
-
-    if user_id in special_users or user_id in admin_users:
-        special_name = special_users.get(user_id, "Admin")
+    cursor.execute('SELECT is_super_user FROM users WHERE user_id = ?', (user_id,))
+    user_data = cursor.fetchone()
+    
+    if user_data and user_data[0]:
         await event.respond(
-            f"✨ Welcome, {special_name}! ✨\n"
+            f"✨ Welcome, Super User! ✨\n"
             "It's always a pleasure to have you here. You have unlimited access to the best PDFs in Nami's Library! 📚\n"
             "Just type the title or topic you're interested in, and I'll find the perfect PDFs for you.\n"
             "Developed by @redmoon0x(Deviprasad Shetty)",
@@ -190,31 +224,31 @@ async def callback_query_handler(event):
         print("Received unknown callback data:", data)
         await event.answer("Something went wrong, please try again.")
 
-import aiohttp
-import asyncio
-from telethon import types
-from telethon.tl.types import InputPeerUser
-from io import BytesIO
-
 async def handle_pdf_request(call):
     user_id = call.sender_id
     current_time = datetime.now()
 
-    if user_id in user_cooldowns:
-        time_diff = current_time - user_cooldowns[user_id]
+    cursor.execute('SELECT last_pdf_request FROM users WHERE user_id = ?', (user_id,))
+    last_request = cursor.fetchone()
+
+    if last_request and last_request[0]:
+        last_request_time = datetime.fromisoformat(last_request[0])
+        time_diff = current_time - last_request_time
         if time_diff.total_seconds() < 60:
             remaining_time = 60 - int(time_diff.total_seconds())
             await call.answer(f"Please wait {remaining_time} seconds before requesting another PDF.")
             return
 
-    user_cooldowns[user_id] = current_time
+    cursor.execute('UPDATE users SET last_pdf_request = ? WHERE user_id = ?', (current_time.isoformat(), user_id))
+    conn.commit()
 
     try:
         url_hash = call.data.decode().split(':')[1]
-        pdf_info = url_cache[call.chat_id].get(url_hash)
+        cursor.execute('SELECT title, url FROM pdf_cache WHERE chat_id = ? AND url_hash = ?', (call.chat_id, url_hash))
+        pdf_info = cursor.fetchone()
         
         if pdf_info:
-            title, url = pdf_info['title'], pdf_info['url']
+            title, url = pdf_info
             
             status_message = await client.send_message(call.chat_id, f"Fetching: {title}\nPlease wait...")
             
@@ -226,29 +260,50 @@ async def handle_pdf_request(call):
                         
                         await status_message.edit(f"Sending: {title}")
                         
-                        file = types.InputFile(BytesIO(content), name=f"{title}.pdf", size=file_size)
-                        
-                        try:
+                        if file_size <= MAX_DIRECT_FILE_SIZE:
+                            # Send directly using send_document
+                            file = BytesIO(content)
+                            file.name = f"{title}.pdf"
                             await client.send_file(
                                 entity=InputPeerUser(call.sender_id, 0),
                                 file=file,
                                 caption=f"{title}\n\nSource: {url}",
                                 force_document=True,
-                                progress_callback=lambda c, t: progress_callback(status_message, c, t)
+                                progress_callback=lambda c, t: asyncio.create_task(progress_callback(status_message, c, t))
                             )
                             await status_message.delete()
                             await call.answer("PDF sent successfully!")
                             success = True
-                        except Exception as e:
-                            await status_message.edit(f"Error sending file: {str(e)}")
-                            success = False
-                    else:
-                        await status_message.edit(f"Failed to fetch PDF: HTTP {response.status}")
-                        success = False
+                        else:
+                            # Stream the file
+                            await status_message.edit(f"Streaming: {title}")
+                            async with session.get(url) as response:
+                                if response.status == 200:
+                                    async for chunk in response.content.iter_chunked(1024 * 1024):  # Adjust chunk size as needed
+                                        try:
+                                            await client.send_file(
+                                                entity=InputPeerUser(call.sender_id, 0),
+                                                file=BytesIO(chunk),
+                                                caption=f"{title}\n\nSource: {url}",
+                                                force_document=True,
+                                                progress_callback=lambda c, t: asyncio.create_task(progress_callback(status_message, c, t))
+                                            )
+                                        except Exception as e:
+                                            await status_message.edit(f"Error sending file: {str(e)}")
+                                            success = False
+                                            break
+                                    else:
+                                        await status_message.delete()
+                                        await call.answer("PDF sent successfully!")
+                                        success = True
+                                else:
+                                    await status_message.edit(f"Failed to fetch PDF: HTTP {response.status}")
+                                    success = False
             
             await log_pdf_request(await client.get_entity(call.sender_id), pdf_info, success)
             
-            del url_cache[call.chat_id][url_hash]
+            cursor.execute('DELETE FROM pdf_cache WHERE chat_id = ? AND url_hash = ?', (call.chat_id, url_hash))
+            conn.commit()
         else:
             await call.answer("Sorry, I couldn't retrieve the PDF. Please try searching again.")
     except Exception as e:
@@ -265,8 +320,8 @@ async def log_pdf_request(user, pdf_info, success):
     log_message = (
         f"User: {user.first_name} {user.last_name} (ID: {user.id}, Username: @{user.username})\n"
         f"Action: {status} a PDF\n"
-        f"Title: {pdf_info['title']}\n"
-        f"URL: {pdf_info['url']}\n"
+        f"Title: {pdf_info[0]}\n"
+        f"URL: {pdf_info[1]}\n"
         f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     
@@ -277,63 +332,82 @@ async def log_pdf_request(user, pdf_info, success):
 
 @client.on(events.NewMessage(pattern='/addsuperuser'))
 async def add_superuser(event):
-    if event.sender_id not in admin_users:
+    if not await is_admin(event.sender_id):
         await event.respond("❌ You are not authorized to use this command.")
         return
 
-    if event.is_reply:
-        reply = await event.get_reply_message()
-        new_user_id = reply.sender_id
-        new_username = reply.sender.username
-    elif event.message.fwd_from:
-        fwd = event.message.fwd_from
-        new_user_id = fwd.from_id.user_id if fwd.from_id else None
-        new_username = fwd.from_name if fwd.from_name else "Unknown"
-    else:
-        await event.respond("Please reply to or forward a message from the user you want to promote.")
+    await event.respond("Please forward a message from the user you want to promote to super user.")
+    
+    try:
+        forwarded_msg = await client.wait_for(events.NewMessage(from_users=event.sender_id, forwarded=True), timeout=60)
+    except asyncio.TimeoutError:
+        await event.respond("Timeout. Please try the command again and forward a message within 60 seconds.")
         return
 
-    if not new_user_id:
-        await event.respond("Unable to identify the user. Please try again.")
-        return
-
-    if new_user_id in special_users:
-        await event.respond(f"User {new_username} is already a super user.")
+    if forwarded_msg.forward.sender_id:
+        new_user_id = forwarded_msg.forward.sender_id
+        cursor.execute('SELECT is_super_user FROM users WHERE user_id = ?', (new_user_id,))
+        user_data = cursor.fetchone()
+        
+        if user_data and user_data[0]:
+            await event.respond(f"User (ID: {new_user_id}) is already a super user.")
+        else:
+            cursor.execute('INSERT OR REPLACE INTO users (user_id, is_super_user) VALUES (?, 1)', (new_user_id,))
+            conn.commit()
+            await event.respond(f"✅ User (ID: {new_user_id}) has been added as a super user.")
+            try:
+                await client.send_message(new_user_id, "You have been promoted to super user status! You now have unlimited searches. 🎉")
+            except Exception as e:
+                await event.respond(f"Note: Failed to notify the user. They might have blocked the bot or have privacy settings enabled.")
     else:
-        special_users[new_user_id] = new_username
-        await event.respond(f"✅ User {new_username} (ID: {new_user_id}) has been added as a super user.")
-        print(f"Admin added {new_username} ({new_user_id}) as a super user.")
+        await event.respond("Failed to extract user ID from the forwarded message. Please try again.")
 
 @client.on(events.NewMessage(pattern='/removesuperuser'))
 async def remove_superuser(event):
-    if event.sender_id not in admin_users:
+    if not await is_admin(event.sender_id):
         await event.respond("❌ You are not authorized to use this command.")
         return
 
-    if event.is_reply:
-        reply = await event.get_reply_message()
-        user_id = reply.sender_id
+    await event.respond("Please forward a message from the user you want to remove from super users.")
+    
+    try:
+        forwarded_msg = await client.wait_for(events.NewMessage(from_users=event.sender_id, forwarded=True), timeout=60)
+    except asyncio.TimeoutError:
+        await event.respond("Timeout. Please try the command again and forward a message within 60 seconds.")
+        return
 
-        if user_id in special_users:
-            del special_users[user_id]
-            await event.respond(f"✅ User has been removed from super users.")
+    if forwarded_msg.forward.sender_id:
+        user_id = forwarded_msg.forward.sender_id
+        cursor.execute('UPDATE users SET is_super_user = 0 WHERE user_id = ?', (user_id,))
+        if cursor.rowcount > 0:
+            conn.commit()
+            await event.respond(f"✅ User (ID: {user_id}) has been removed from super users.")
+            try:
+                await client.send_message(user_id, "Your super user status has been revoked. You now have limited searches like regular users.")
+            except Exception as e:
+                await event.respond(f"Note: Failed to notify the user. They might have blocked the bot or have privacy settings enabled.")
         else:
-            await event.respond("This user is not a super user.")
+            await event.respond(f"User (ID: {user_id}) is not a super user.")
     else:
-        await event.respond("Please reply to a message from the user you want to remove from super users.")
-
-
+        await event.respond("Failed to extract user ID from the forwarded message. Please try again.")
 
 @client.on(events.NewMessage(pattern='/listsuperusers'))
 async def list_superusers(event):
-    if event.sender_id not in admin_users:
+    if not await is_admin(event.sender_id):
         await event.respond("❌ You are not authorized to use this command.")
         return
 
-    if special_users:
+    cursor.execute('SELECT user_id FROM users WHERE is_super_user = 1')
+    super_users = cursor.fetchall()
+
+    if super_users:
         message = "Current super users:\n\n"
-        for user_id, username in special_users.items():
-            message += f"- {username} (ID: {user_id})\n"
+        for (user_id,) in super_users:
+            try:
+                user = await client.get_entity(user_id)
+                message += f"- {user.first_name} {user.last_name} (ID: {user_id}, Username: @{user.username})\n"
+            except Exception as e:
+                message += f"- Unknown User (ID: {user_id})\n"
     else:
         message = "There are no super users currently."
 
@@ -341,39 +415,42 @@ async def list_superusers(event):
 
 @client.on(events.NewMessage(pattern='/help'))
 async def help(event):
-    if event.sender_id in admin_users:
-        await event.respond(
-            "Admin Commands:\n"
-            "/addsuperuser - Add a super user (reply to their message)\n"
-            "/removesuperuser - Remove a super user (reply to their message)\n"
-            "/listsuperusers - List all super users\n"
-            "/broadcast - Send a message to all users\n"
-            "/stats - View bot statistics\n\n"
-            "User Commands:\n"
-            "Just type the title or a keyword related to the PDF you're looking for.\n"
-            "I will search the web for relevant PDFs and provide you with a list of options to choose from.\n"
-            "Click on any of the options to get the PDF delivered directly to you.\n"
-            "Non-super users have a limit of 2 searches every 2 hours."
-        )
+    is_admin_user = await is_admin(event.sender_id)
+    cursor.execute('SELECT is_super_user FROM users WHERE user_id = ?', (event.sender_id,))
+    user_data = cursor.fetchone()
+    is_super_user = user_data and user_data[0] if user_data else False
+
+    help_message = "Welcome to Nami's Library Bot! 📚\n\n"
+    help_message += "To use this bot, simply type the title or a keyword related to the PDF you're looking for.\n"
+    help_message += "I will search the web for relevant PDFs and provide you with a list of options to choose from.\n"
+    help_message += "Click on any of the options to get the PDF delivered directly to you.\n"
+
+    if is_super_user:
+        help_message += "\nAs a super user, you have unlimited searches! 🌟\n"
     else:
-        await event.respond(
-            "To use this bot, simply type the title or a keyword related to the PDF you're looking for.\n"
-            "I will search the web for relevant PDFs and provide you with a list of options to choose from.\n"
-            "Click on any of the options to get the PDF delivered directly to you.\n"
-            "Non-super users have a limit of 2 searches every 2 hours."
-        )
+        help_message += f"\nRegular users have a limit of {SEARCH_LIMIT} searches every {RESET_TIME_HOURS} hours.\n"
 
-# Global set to store user IDs
-all_user_ids = set()
+    if is_admin_user:
+        help_message += "\nAdmin Commands:\n"
+        help_message += "/addsuperuser - Add a super user (forward a message from the user)\n"
+        help_message += "/removesuperuser - Remove a super user (forward a message from the user)\n"
+        help_message += "/listsuperusers - List all super users\n"
+        help_message += "/broadcast - Send a message to all users\n"
+        help_message += "/stats - View bot statistics\n"
 
-@client.on(events.NewMessage)
-async def message_handler(event):
-    all_user_ids.add(event.sender_id)  # Store user ID
-    await handle_message(event)
+    buttons = [
+        [Button.inline("🙏 Donate", data="donate")],
+        [Button.url("Developer", "https://t.me/redmoon0x")]
+    ]
+
+    await event.respond(help_message, buttons=buttons)
+
+async def is_admin(user_id):
+    return user_id == 1502110448  # Replace with your admin user ID
 
 @client.on(events.NewMessage(pattern='/broadcast'))
 async def broadcast(event):
-    if event.sender_id not in admin_users:
+    if not await is_admin(event.sender_id):
         await event.respond("❌ You are not authorized to use this command.")
         return
     
@@ -382,9 +459,12 @@ async def broadcast(event):
         await event.respond("Please include a message to broadcast.")
         return
     
+    cursor.execute('SELECT user_id FROM users')
+    all_users = cursor.fetchall()
+    
     failed = 0
     success = 0
-    for user_id in all_user_ids:
+    for (user_id,) in all_users:
         try:
             await client.send_message(user_id, message_to_broadcast)
             success += 1
@@ -396,24 +476,35 @@ async def broadcast(event):
 
 @client.on(events.NewMessage(pattern='/stats'))
 async def stats(event):
-    if event.sender_id not in admin_users:
+    if not await is_admin(event.sender_id):
         await event.respond("❌ You are not authorized to use this command.")
         return
 
-    total_users = len(all_user_ids)
-    total_searches = sum(user['count'] for user in search_tracker.values())
-    active_users = sum(1 for user in search_tracker.values() if user['last_search_time'] and (datetime.now() - user['last_search_time']).days < 7)
+    cursor.execute('SELECT COUNT(*) FROM users')
+    total_users = cursor.fetchone()[0]
+
+    cursor.execute('SELECT COUNT(*) FROM users WHERE is_super_user = 1')
+    super_users = cursor.fetchone()[0]
+
+    cursor.execute('SELECT COUNT(*) FROM users WHERE last_search_time > ?', (datetime.now() - timedelta(days=7),))
+    active_users = cursor.fetchone()[0]
+
+    cursor.execute('SELECT SUM(search_count) FROM users')
+    total_searches = cursor.fetchone()[0] or 0
 
     stats_message = (
         f"📊 Bot Statistics 📊\n\n"
         f"Total Users: {total_users}\n"
         f"Total Searches: {total_searches}\n"
         f"Active Users (last 7 days): {active_users}\n"
-        f"Super Users: {len(special_users)}\n"
-        f"Admin Users: {len(admin_users)}"
+        f"Super Users: {super_users}\n"
     )
 
     await event.respond(stats_message)
+
+@client.on(events.NewMessage)
+async def message_handler(event):
+    await handle_message(event)
 
 def main():
     print("Bot is starting...")
