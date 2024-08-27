@@ -344,21 +344,23 @@ async def add_superuser(event):
         await event.respond("Timeout. Please try the command again and forward a message within 60 seconds.")
         return
 
-    if forwarded_msg.forward.sender_id:
+    if forwarded_msg.forward and forwarded_msg.forward.sender_id:
         new_user_id = forwarded_msg.forward.sender_id
-        cursor.execute('SELECT is_super_user FROM users WHERE user_id = ?', (new_user_id,))
-        user_data = cursor.fetchone()
         
-        if user_data and user_data[0]:
-            await event.respond(f"User (ID: {new_user_id}) is already a super user.")
-        else:
-            cursor.execute('UPDATE users SET is_super_user = 1 WHERE user_id = ?', (new_user_id,))
-            conn.commit()
-            await event.respond(f"✅ User (ID: {new_user_id}) has been added as a super user.")
-            try:
-                await client.send_message(new_user_id, "You have been promoted to super user status! You now have unlimited searches. 🎉")
-            except Exception as e:
-                await event.respond(f"Note: Failed to notify the user. They might have blocked the bot or have privacy settings enabled.")
+        # Ensure the user exists in the database
+        cursor.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (new_user_id,))
+        
+        # Update the user to be a superuser
+        cursor.execute('UPDATE users SET is_super_user = 1 WHERE user_id = ?', (new_user_id,))
+        conn.commit()
+        
+        await event.respond(f"✅ User (ID: {new_user_id}) has been added as a super user.")
+        
+        # Notify the user that they have been promoted to superuser
+        try:
+            await client.send_message(new_user_id, "🎉 Congratulations! You have been promoted to super user status. You now have unlimited searches and additional privileges.")
+        except Exception as e:
+            await event.respond(f"Note: Failed to notify the user. They might have blocked the bot or have privacy settings enabled.")
     else:
         await event.respond("Failed to extract user ID from the forwarded message. Please try again.")
 
@@ -372,20 +374,25 @@ async def remove_superuser(event):
         await event.respond("Timeout. Please try the command again and forward a message within 60 seconds.")
         return
 
-    if forwarded_msg.forward.sender_id:
+    if forwarded_msg.forward and forwarded_msg.forward.sender_id:
         user_id = forwarded_msg.forward.sender_id
+        
+        # Update the user to remove superuser status
         cursor.execute('UPDATE users SET is_super_user = 0 WHERE user_id = ?', (user_id,))
         if cursor.rowcount > 0:
             conn.commit()
             await event.respond(f"✅ User (ID: {user_id}) has been removed from super users.")
+            
+            # Notify the user that they have been removed as a superuser
             try:
-                await client.send_message(user_id, "Your super user status has been revoked. You now have limited searches like regular users.")
+                await client.send_message(user_id, "⚠️ Your super user status has been revoked. You now have limited searches like regular users.")
             except Exception as e:
                 await event.respond(f"Note: Failed to notify the user. They might have blocked the bot or have privacy settings enabled.")
         else:
             await event.respond(f"User (ID: {user_id}) is not a super user.")
     else:
         await event.respond("Failed to extract user ID from the forwarded message. Please try again.")
+
 
 # ... (rest of your code)
 @client.on(events.NewMessage(pattern='/listsuperusers'))
