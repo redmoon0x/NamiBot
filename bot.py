@@ -30,6 +30,7 @@ bot_token = get_env('TELEGRAM_BOT_TOKEN')
 storage_group_id = get_env('STORAGE_GROUP_ID', convert=int)
 log_channel_id = get_env('LOG_CHANNEL_ID', convert=int)
 PDF_SCRAPER_URL = get_env('PDF_SCRAPER_URL', 'https://namiapi.onrender.com')
+DEVELOPER_ID = get_env('DEVELOPER_ID', convert=int)  # Get DEVELOPER_ID from env
 
 client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 
@@ -131,7 +132,7 @@ async def handle_message(event):
     
     is_super_user, search_count, last_search_time = user_data
     
-    if is_super_user:
+    if user_id == DEVELOPER_ID:  # Developer has unlimited searches
         await event.respond("You have unlimited searches. 🚀")
     else:
         now = datetime.now()
@@ -540,7 +541,6 @@ async def speedtest_check(event):
 
 def main():
     print("Bot is starting...")
-    client.run_until_disconnected()
-
+    client.run_until_disconnected() 
 if __name__ == '__main__':
     main()
