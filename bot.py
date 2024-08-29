@@ -267,8 +267,15 @@ async def add_superuser(event):
 
     if event.is_reply:
         reply = await event.get_reply_message()
-        new_user_id = reply.sender_id
-        new_username = reply.sender.username
+        
+        # Check if the message is forwarded and if so, get the original sender's ID
+        if reply.forward:
+            new_user_id = reply.forward.sender_id
+            new_username = reply.forward.sender.username if reply.forward.sender.username else reply.forward.sender.first_name
+        else:
+            # If the message is not forwarded, get the sender ID of the replied message
+            new_user_id = reply.sender_id
+            new_username = reply.sender.username if reply.sender.username else reply.sender.first_name
 
         if new_user_id in special_users:
             await event.respond(f"User {new_username} is already a super user.")
@@ -278,6 +285,8 @@ async def add_superuser(event):
             print(f"Admin added {new_username} ({new_user_id}) as a super user.")
     else:
         await event.respond("Please reply to a message from the user you want to promote.")
+
+
 
 @client.on(events.NewMessage(pattern='/removesuperuser'))
 async def remove_superuser(event):
