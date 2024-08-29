@@ -6,6 +6,9 @@ import asyncio
 import aiohttp
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import sqlite3
+import secrets
+
 
 load_dotenv()
 
@@ -186,19 +189,53 @@ async def callback_query_handler(event):
         print("Received unknown callback data:", data)
         await event.answer("Something went wrong, please try again.")
 
+
+
+# SQLite setup and token management
+def init_db():
+    conn = sqlite3.connect('tokens.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS tokens
+                 (token TEXT PRIMARY KEY, user_id INTEGER, expiry TIMESTAMP)''')
+    conn.commit()
+    conn.close()
+
+def generate_token(user_id):
+    token = secrets.token_urlsafe()
+    expiry = datetime.now() + timedelta(hours=12)
+    conn = sqlite3.connect('tokens.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO tokens VALUES (?, ?, ?)", (token, user_id, expiry))
+    conn.commit()
+    conn.close()
+    return token
+
+def verify_token(token):
+    conn = sqlite3.connect('tokens.db')
+    c = conn.cursor()
+    c.execute("SELECT expiry FROM tokens WHERE token = ?", (token,))
+    result = c.fetchone()
+    if result:
+        expiry = datetime.strptime(result[0], '%Y-%m-%d %H:%M:%S.%f')
+        if expiry > datetime.now():
+            return True
+        else:
+            c.execute("DELETE FROM tokens WHERE token = ?", (token,))
+    conn.commit()
+    conn.close()
+    return False
+
+# Telegram bot handler
 async def handle_pdf_request(call):
     user_id = call.sender_id
     current_time = datetime.now()
-
     if user_id in user_cooldowns:
         time_diff = current_time - user_cooldowns[user_id]
         if time_diff.total_seconds() < 60:  # 1 minute cooldown
             remaining_time = 60 - int(time_diff.total_seconds())
             await call.answer(f"Please wait {remaining_time} seconds before requesting another PDF.")
             return
-
     user_cooldowns[user_id] = current_time
-
     try:
         user = await client.get_entity(call.sender_id)
         url_hash = call.data.decode().split(':')[1]
@@ -207,29 +244,23 @@ async def handle_pdf_request(call):
         if pdf_info:
             title, url = pdf_info['title'], pdf_info['url']
             
+            token = generate_token(user_id)
+            # Assuming your Render app is at https://your-render-app.onrender.com
+            pdf_url = f"https://your-render-app.onrender.com/pdf?url={url}&token={token}"
+            
             try:
-                await client.send_file(call.chat_id, url, caption=f"{title}\n\nSource: {url}")
-                await call.answer("PDF sent successfully!")
+                await client.send_message(
+                    call.chat_id,
+                    f"{title}\n\nView/Download PDF: {pdf_url}\n\nSource: {url}"
+                )
+                await call.answer("PDF link sent successfully!")
                 success = True
-            except ChatIdInvalidError:
-                await call.answer("Failed to send the PDF. Please start a chat with the bot first.")
-                success = False
-            except FloodWaitError as e:
-                await call.answer(f"Rate limit exceeded. Please wait for {e.seconds} seconds.")
-                await asyncio.sleep(e.seconds)
-                success = False
             except Exception as e:
-                await call.answer("An error occurred while sending the PDF. Please try again later.")
-                print(f"Error in sending file to user: {str(e)}")
+                await call.answer("An error occurred while sending the PDF link. Please try again later.")
+                print(f"Error in sending message to user: {str(e)}")
                 success = False
             
             await log_pdf_request(user, pdf_info, success)
-            
-            if success:
-                try:
-                    await client.send_file(storage_group_id, url, caption=f"{title}\n\nSource: {url}")
-                except Exception as e:
-                    print(f"Failed to send to storage group: {str(e)}")
             
             countdown_message = await call.client.send_message(call.chat_id, "You can request another PDF in 60 seconds.")
             for i in range(59, 0, -1):
@@ -243,6 +274,9 @@ async def handle_pdf_request(call):
     except Exception as e:
         await call.answer("An unexpected error occurred. Please try again.")
         print(f"Error in handle_pdf_request: {str(e)}")
+
+# Initialize the database
+init_db()
 
 async def log_pdf_request(user, pdf_info, success):
     status = "successfully received" if success else "failed to receive"
