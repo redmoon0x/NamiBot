@@ -6,7 +6,8 @@ import asyncio
 import aiohttp
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-import sqlite3
+import psycopg2
+from psycopg2.extras import DictCursor
 import secrets
 
 
@@ -191,11 +192,7 @@ async def callback_query_handler(event):
 
 
 
-import psycopg2
-from psycopg2.extras import DictCursor
-import os
-import secrets
-from datetime import datetime, timedelta
+
 
 DATABASE_URL = os.environ['postgresql://tokens_q0zt_user:NaKCtK3QIJGNL3D4dVpcJuxA0q3ZfigA@dpg-cr8q3156l47c73bnbbqg-a.oregon-postgres.render.com/tokens_q0zt']
 
