@@ -9,7 +9,11 @@ from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import DictCursor
 import secrets
+import logging
+from shortuuid import ShortUUID
+from pyshorteners import Shortener  # Import pyshorteners library
 
+logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 
@@ -27,7 +31,7 @@ api_hash = get_env('TELEGRAM_API_HASH')
 bot_token = get_env('TELEGRAM_BOT_TOKEN')
 storage_group_id = get_env('STORAGE_GROUP_ID', convert=int)
 log_channel_id = get_env('LOG_CHANNEL_ID', convert=int)
-api_base_url = get_env('API_BASE_URL', 'https://namiapi.onrender.com')  # Add this to your .env file
+api_base_url = get_env('API_BASE_URL', 'https://namiapi.onrender.com') 
 
 client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 
@@ -266,10 +270,16 @@ async def handle_pdf_request(call):
             token = generate_token(user_id)
             pdf_url = f"https://shinobishelf.onrender.com/pdf?url={url}&token={token}"
             
+            # Shorten the PDF URL using pyshorteners
+            short_url = await shorten_url(pdf_url)
+            
             try:
+                # More engaging message with emojis and call-to-action
                 await client.send_message(
                     call.chat_id,
-                    f"{title}\n\nView/Download PDF: {pdf_url}\n\nSource: {url}"
+                    f"🎉  **Found it!** 🎉\n\n"
+                    f"📖 **{title}** is ready for you!\n\n"
+                    f"🚀 Click here to access the PDF: {short_url}"
                 )
                 await call.answer("PDF link sent successfully!")
                 success = True
@@ -281,10 +291,10 @@ async def handle_pdf_request(call):
             
             await log_pdf_request(user, pdf_info, success)
             
-            countdown_message = await call.client.send_message(call.chat_id, "You can request another PDF in 60 seconds.")
+            countdown_message = await call.client.send_message(call.chat_id, "⏳ You can request another PDF in 60 seconds.")
             for i in range(59, 0, -1):
                 await asyncio.sleep(1)
-                await countdown_message.edit(f"You can request another PDF in {i} seconds.")
+                await countdown_message.edit(f"⏳ You can request another PDF in {i} seconds.")
             await countdown_message.delete()
             
             del url_cache[call.chat_id][url_hash]
@@ -442,14 +452,24 @@ async def stats(event):
 
     stats_message = (
         f"📊 Bot Statistics 📊\n\n"
-        f"Total Users: {total_users}\n"
-        f"Total Searches: {total_searches}\n"
-        f"Active Users (last 7 days): {active_users}\n"
-        f"Super Users: {len(special_users)}\n"
-        f"Admin Users: {len(admin_users)}"
+        f"👥 Total Users: {total_users}\n"
+        f"🔍 Total Searches: {total_searches}\n"
+        f"📈 Active Users (last 7 days): {active_users}\n"
+        f"🦸‍♂️ Super Users: {len(special_users)}\n"
+        f"👮‍♂️ Admin Users: {len(admin_users)}"
     )
 
     await event.respond(stats_message)
+
+# Shorten URL using pyshorteners
+async def shorten_url(url):
+    shortener = Shortener()
+    try:
+        short_url = shortener.tinyurl.short(url)  # Use TinyURL service
+        return short_url
+    except Exception as e:
+        print(f"Error shortening URL: {str(e)}")
+        return url
 
 def main():
     print("Bot is starting...")
