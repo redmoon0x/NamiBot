@@ -191,21 +191,22 @@ async def callback_query_handler(event):
 
 
 
-import sqlite3
-from datetime import datetime, timedelta
+import psycopg2
+from psycopg2.extras import DictCursor
+import os
 import secrets
-import asyncio
-import logging
+from datetime import datetime, timedelta
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+DATABASE_URL = os.environ['postgresql://tokens_q0zt_user:NaKCtK3QIJGNL3D4dVpcJuxA0q3ZfigA@dpg-cr8q3156l47c73bnbbqg-a.oregon-postgres.render.com/tokens_q0zt']
 
-# SQLite setup and token management
+def get_db_connection():
+    return psycopg2.connect(DATABASE_URL, sslmode='require')
+
 def init_db():
-    conn = sqlite3.connect('tokens.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS tokens
-                 (token TEXT PRIMARY KEY, user_id INTEGER, expiry TIMESTAMP)''')
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute('''CREATE TABLE IF NOT EXISTS tokens
+                       (token TEXT PRIMARY KEY, user_id INTEGER, expiry TIMESTAMP)''')
     conn.commit()
     conn.close()
     logging.info("Database initialized")
@@ -213,32 +214,35 @@ def init_db():
 def generate_token(user_id):
     token = secrets.token_urlsafe()
     expiry = datetime.now() + timedelta(hours=12)
-    conn = sqlite3.connect('tokens.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO tokens VALUES (?, ?, ?)", (token, user_id, expiry))
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO tokens (token, user_id, expiry) VALUES (%s, %s, %s)",
+                    (token, user_id, expiry))
     conn.commit()
     conn.close()
     logging.debug(f"Token generated for user {user_id}: {token}")
     return token
 
 def verify_token(token):
-    conn = sqlite3.connect('tokens.db')
-    c = conn.cursor()
-    c.execute("SELECT expiry FROM tokens WHERE token = ?", (token,))
-    result = c.fetchone()
-    if result:
-        expiry = datetime.strptime(result[0], '%Y-%m-%d %H:%M:%S.%f')
-        if expiry > datetime.now():
-            logging.debug(f"Token {token} verified successfully")
-            return True
+    conn = get_db_connection()
+    with conn.cursor(cursor_factory=DictCursor) as cur:
+        cur.execute("SELECT expiry FROM tokens WHERE token = %s", (token,))
+        result = cur.fetchone()
+        if result:
+            expiry = result['expiry']
+            if expiry > datetime.now():
+                logging.debug(f"Token {token} verified successfully")
+                return True
+            else:
+                cur.execute("DELETE FROM tokens WHERE token = %s", (token,))
+                conn.commit()
+                logging.debug(f"Token {token} expired and deleted")
         else:
-            c.execute("DELETE FROM tokens WHERE token = ?", (token,))
-            logging.debug(f"Token {token} expired and deleted")
-    else:
-        logging.debug(f"Token {token} not found in database")
-    conn.commit()
+            logging.debug(f"Token {token} not found in database")
     conn.close()
     return False
+
+# Make sure to call init_db() when your bot starts up
 
 # Telegram bot handler
 async def handle_pdf_request(call):
@@ -453,6 +457,7 @@ async def stats(event):
 def main():
     print("Bot is starting...")
     client.run_until_disconnected()
+    init_db()
 
 if __name__ == '__main__':
     main()
