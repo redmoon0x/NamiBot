@@ -1,5 +1,5 @@
 aiohttp
-sqlite3
+db-sqlite3
 asyncio
 python-dotenv
 telethon
