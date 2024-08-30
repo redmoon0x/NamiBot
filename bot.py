@@ -191,6 +191,15 @@ async def callback_query_handler(event):
 
 
 
+import sqlite3
+from datetime import datetime, timedelta
+import secrets
+import asyncio
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
 # SQLite setup and token management
 def init_db():
     conn = sqlite3.connect('tokens.db')
@@ -199,6 +208,7 @@ def init_db():
                  (token TEXT PRIMARY KEY, user_id INTEGER, expiry TIMESTAMP)''')
     conn.commit()
     conn.close()
+    logging.info("Database initialized")
 
 def generate_token(user_id):
     token = secrets.token_urlsafe()
@@ -208,6 +218,7 @@ def generate_token(user_id):
     c.execute("INSERT INTO tokens VALUES (?, ?, ?)", (token, user_id, expiry))
     conn.commit()
     conn.close()
+    logging.debug(f"Token generated for user {user_id}: {token}")
     return token
 
 def verify_token(token):
@@ -218,9 +229,13 @@ def verify_token(token):
     if result:
         expiry = datetime.strptime(result[0], '%Y-%m-%d %H:%M:%S.%f')
         if expiry > datetime.now():
+            logging.debug(f"Token {token} verified successfully")
             return True
         else:
             c.execute("DELETE FROM tokens WHERE token = ?", (token,))
+            logging.debug(f"Token {token} expired and deleted")
+    else:
+        logging.debug(f"Token {token} not found in database")
     conn.commit()
     conn.close()
     return False
@@ -229,13 +244,16 @@ def verify_token(token):
 async def handle_pdf_request(call):
     user_id = call.sender_id
     current_time = datetime.now()
+    
     if user_id in user_cooldowns:
         time_diff = current_time - user_cooldowns[user_id]
         if time_diff.total_seconds() < 60:  # 1 minute cooldown
             remaining_time = 60 - int(time_diff.total_seconds())
             await call.answer(f"Please wait {remaining_time} seconds before requesting another PDF.")
             return
+    
     user_cooldowns[user_id] = current_time
+    
     try:
         user = await client.get_entity(call.sender_id)
         url_hash = call.data.decode().split(':')[1]
@@ -245,7 +263,6 @@ async def handle_pdf_request(call):
             title, url = pdf_info['title'], pdf_info['url']
             
             token = generate_token(user_id)
-            # Assuming your Render app is at https://your-render-app.onrender.com
             pdf_url = f"https://shinobishelf.onrender.com/pdf?url={url}&token={token}"
             
             try:
@@ -255,9 +272,10 @@ async def handle_pdf_request(call):
                 )
                 await call.answer("PDF link sent successfully!")
                 success = True
+                logging.info(f"PDF link sent to user {user_id}")
             except Exception as e:
                 await call.answer("An error occurred while sending the PDF link. Please try again later.")
-                print(f"Error in sending message to user: {str(e)}")
+                logging.error(f"Error in sending message to user {user_id}: {str(e)}")
                 success = False
             
             await log_pdf_request(user, pdf_info, success)
@@ -271,9 +289,10 @@ async def handle_pdf_request(call):
             del url_cache[call.chat_id][url_hash]
         else:
             await call.answer("Sorry, I couldn't retrieve the PDF. Please try searching again.")
+            logging.warning(f"PDF not found in cache for user {user_id}")
     except Exception as e:
         await call.answer("An unexpected error occurred. Please try again.")
-        print(f"Error in handle_pdf_request: {str(e)}")
+        logging.error(f"Error in handle_pdf_request for user {user_id}: {str(e)}")
 
 # Initialize the database
 init_db()
