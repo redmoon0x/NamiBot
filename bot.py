@@ -246,7 +246,7 @@ async def handle_pdf_request(call):
             
             token = generate_token(user_id)
             # Assuming your Render app is at https://your-render-app.onrender.com
-            pdf_url = f"https://your-render-app.onrender.com/pdf?url={url}&token={token}"
+            pdf_url = f"https://shinobishelf.onrender.com/pdf?url={url}&token={token}"
             
             try:
                 await client.send_message(
