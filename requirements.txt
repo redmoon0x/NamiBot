@@ -1,5 +1,5 @@
 aiohttp
-
+pyshorteners
 asyncio
 python-dotenv
 telethon
