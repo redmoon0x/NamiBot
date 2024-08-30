@@ -1,5 +1,6 @@
 aiohttp
-db-sqlite3
+
 asyncio
 python-dotenv
 telethon
+psycopg
