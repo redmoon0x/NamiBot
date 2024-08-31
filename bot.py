@@ -198,7 +198,7 @@ async def callback_query_handler(event):
 
 
 
-DATABASE_URL = os.environ['postgresql://tokens_q0zt_user:NaKCtK3QIJGNL3D4dVpcJuxA0q3ZfigA@dpg-cr8q3156l47c73bnbbqg-a.oregon-postgres.render.com/tokens_q0zt']
+DATABASE_URL = os.environ['API_BASE_URL']
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
