@@ -3,4 +3,4 @@ pyshorteners
 asyncio
 python-dotenv
 telethon
-psycopg
+psycopg2
