@@ -90,7 +90,8 @@ async def send_results_page(event, results, page, query):
         await event.edit(header, buttons=buttons)
     else:
         await event.respond(header, buttons=buttons)
-
+        
+@client.on(events.NewMessage)
 async def handle_message(event):
     user_id = event.sender_id
     if event.text.startswith('/'):
