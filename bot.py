@@ -6,8 +6,6 @@ import asyncio
 import aiohttp
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-import psycopg2
-from psycopg2.extras import DictCursor
 import secrets
 import logging
 from shortuuid import ShortUUID
@@ -31,7 +29,7 @@ api_hash = get_env('TELEGRAM_API_HASH')
 bot_token = get_env('TELEGRAM_BOT_TOKEN')
 storage_group_id = get_env('STORAGE_GROUP_ID', convert=int)
 log_channel_id = get_env('LOG_CHANNEL_ID', convert=int)
-api_base_url = get_env('API_BASE_URL', 'https://namiapi.onrender.com') 
+api_base_url = get_env('API_BASE_URL', 'https://namiapi.onrender.com')
 
 client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 
@@ -69,25 +67,25 @@ async def perform_search(query, num_results=10):
 async def send_results_page(event, results, page, query):
     buttons = []
     results_list = results['global_results'] if page == 0 else results['archive_results']
-    
+
     for result in results_list:
         url_hash = hashlib.md5(result['url'].encode()).hexdigest()
         url_cache[event.chat_id][url_hash] = {'title': result['title'], 'url': result['url']}
-        
+
         truncated_title = result['title'][:47] + "..." if len(result['title']) > 50 else result['title']
         buttons.append([Button.inline(f"📚 {truncated_title}", f"pdf:{url_hash}")])
-    
+
     nav_buttons = []
     if page == 0 and results['archive_results']:
         nav_buttons.append(Button.inline("➡️ Next Page (Archive.org)", data=f"next_page:{query}"))
     elif page == 1:
         nav_buttons.append(Button.inline("⬅️ Previous Page (Global)", data=f"prev_page:{query}"))
-    
+
     buttons.append(nav_buttons)
-    
+
     page_title = "🌐 Global PDF Results" if page == 0 else "🏛️ Internet Archive PDF Results"
     header = f"📚 {page_title} 📚\n\n🔍 Search query: {query}\n\n"
-    
+
     if isinstance(event, events.CallbackQuery.Event):
         await event.edit(header, buttons=buttons)
     else:
@@ -97,12 +95,12 @@ async def handle_message(event):
     user_id = event.sender_id
     if event.text.startswith('/'):
         return
-    
+
     query = event.text.strip()
     if not query:
         await event.respond("Please provide a search term for the PDF.")
         return
-    
+
     if user_id in special_users or user_id in admin_users:
         await event.respond("You have unlimited searches. 🚀")
     else:
@@ -125,8 +123,9 @@ async def handle_message(event):
             search_tracker[user_id]['count'] += 1
             search_tracker[user_id]['last_search_time'] = now
 
-    await event.respond("Searching for PDFs, please wait...")
-    
+    # Send a message with a progress bar
+    progress_message = await event.respond("Searching for PDFs, please wait...\n\n[🟨🟨🟨🟨🟨🟨🟨🟨🟨🟨🟨]")
+
     try:
         results = await perform_search(query)
         if results:
@@ -136,6 +135,9 @@ async def handle_message(event):
     except Exception as e:
         await event.respond(f"An error occurred while processing your request.")
         print(f"Error in handle_message: {str(e)}")
+    finally:
+        # Delete the progress bar message
+        await progress_message.delete()
 
 
 @client.on(events.NewMessage(pattern='/start'))
@@ -156,17 +158,17 @@ async def start(event):
             ]
         )
     else:
-       await event.respond(
-        "Welcome to Nami's Library! 📚\n"
-        "I can help you find PDFs from the web.\n"
-        "Just type the title or topic you're looking for, and I'll search for it.\n"
-        "If you find this service helpful, consider supporting us:\n"
-        "Developed by @redmoon0x(Deviprasad Shetty)",
-         buttons=[
-            [Button.inline("🙏 Donate", data="donate")],
-            [Button.url("Developer", "https://t.me/redmoon0x")]
-        ]
-    )
+        await event.respond(
+            "Welcome to Nami's Library! 📚\n"
+            "I can help you find PDFs from the web.\n"
+            "Just type the title or topic you're looking for, and I'll search for it.\n"
+            "If you find this service helpful, consider supporting us:\n"
+            "Developed by @redmoon0x(Deviprasad Shetty)",
+            buttons=[
+                [Button.inline("🙏 Donate", data="donate")],
+                [Button.url("Developer", "https://t.me/redmoon0x")]
+            ]
+        )
 
 @client.on(events.CallbackQuery)
 async def callback_query_handler(event):
@@ -194,92 +196,38 @@ async def callback_query_handler(event):
         print("Received unknown callback data:", data)
         await event.answer("Something went wrong, please try again.")
 
-
-
-
-
-DATABASE_URL = os.environ['API_BASE_URL']
-
-def get_db_connection():
-    return psycopg2.connect(DATABASE_URL, sslmode='require')
-
-def init_db():
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute('''CREATE TABLE IF NOT EXISTS tokens
-                       (token TEXT PRIMARY KEY, user_id INTEGER, expiry TIMESTAMP)''')
-    conn.commit()
-    conn.close()
-    logging.info("Database initialized")
-
-def generate_token(user_id):
-    token = secrets.token_urlsafe()
-    expiry = datetime.now() + timedelta(hours=12)
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("INSERT INTO tokens (token, user_id, expiry) VALUES (%s, %s, %s)",
-                    (token, user_id, expiry))
-    conn.commit()
-    conn.close()
-    logging.debug(f"Token generated for user {user_id}: {token}")
-    return token
-
-def verify_token(token):
-    conn = get_db_connection()
-    with conn.cursor(cursor_factory=DictCursor) as cur:
-        cur.execute("SELECT expiry FROM tokens WHERE token = %s", (token,))
-        result = cur.fetchone()
-        if result:
-            expiry = result['expiry']
-            if expiry > datetime.now():
-                logging.debug(f"Token {token} verified successfully")
-                return True
-            else:
-                cur.execute("DELETE FROM tokens WHERE token = %s", (token,))
-                conn.commit()
-                logging.debug(f"Token {token} expired and deleted")
-        else:
-            logging.debug(f"Token {token} not found in database")
-    conn.close()
-    return False
-
-# Make sure to call init_db() when your bot starts up
-
-# Telegram bot handler
 async def handle_pdf_request(call):
     user_id = call.sender_id
     current_time = datetime.now()
-    
+
     if user_id in user_cooldowns:
         time_diff = current_time - user_cooldowns[user_id]
         if time_diff.total_seconds() < 60:  # 1 minute cooldown
             remaining_time = 60 - int(time_diff.total_seconds())
             await call.answer(f"Please wait {remaining_time} seconds before requesting another PDF.")
             return
-    
+
     user_cooldowns[user_id] = current_time
-    
+
     try:
         user = await client.get_entity(call.sender_id)
         url_hash = call.data.decode().split(':')[1]
         pdf_info = url_cache[call.chat_id].get(url_hash)
-        
+
         if pdf_info:
             title, url = pdf_info['title'], pdf_info['url']
-            
-            token = generate_token(user_id)
-            pdf_url = f"https://shinobishelf.onrender.com/pdf?url={url}&token={token}"
-            
+
             # Shorten the PDF URL using pyshorteners
-            short_url = await shorten_url(pdf_url)
-            
+            short_url = await shorten_url(url)
+
             try:
                 # More engaging message with emojis and call-to-action
                 await client.send_message(
                     call.chat_id,
                     f"🎉  **Found it!** 🎉\n\n"
                     f"📖 **{title}** is ready for you!\n\n"
-                    f"🚀 Click here to access the PDF: {short_url}"
+                    f"🚀 Click here to access the PDF: {short_url}\n\n"
+                    f"💌 Enjoy reading! If you find this service helpful, consider supporting us by scanning the QR code below to donate via UPI. Your support helps us keep improving. Thank you for considering a donation! 🙏"
                 )
                 await call.answer("PDF link sent successfully!")
                 success = True
@@ -288,15 +236,15 @@ async def handle_pdf_request(call):
                 await call.answer("An error occurred while sending the PDF link. Please try again later.")
                 logging.error(f"Error in sending message to user {user_id}: {str(e)}")
                 success = False
-            
+
             await log_pdf_request(user, pdf_info, success)
-            
+
             countdown_message = await call.client.send_message(call.chat_id, "⏳ You can request another PDF in 60 seconds.")
             for i in range(59, 0, -1):
                 await asyncio.sleep(1)
                 await countdown_message.edit(f"⏳ You can request another PDF in {i} seconds.")
             await countdown_message.delete()
-            
+
             del url_cache[call.chat_id][url_hash]
         else:
             await call.answer("Sorry, I couldn't retrieve the PDF. Please try searching again.")
@@ -304,162 +252,6 @@ async def handle_pdf_request(call):
     except Exception as e:
         await call.answer("An unexpected error occurred. Please try again.")
         logging.error(f"Error in handle_pdf_request for user {user_id}: {str(e)}")
-
-# Initialize the database
-init_db()
-
-async def log_pdf_request(user, pdf_info, success):
-    status = "successfully received" if success else "failed to receive"
-    log_message = (
-        f"User: {user.first_name} {user.last_name} (ID: {user.id}, Username: @{user.username})\n"
-        f"Action: {status} a PDF\n"
-        f"Title: {pdf_info['title']}\n"
-        f"URL: {pdf_info['url']}\n"
-        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
-    
-    try:
-        await client.send_message(log_channel_id, log_message)
-    except Exception as e:
-        print(f"Failed to send log message: {str(e)}")
-
-@client.on(events.NewMessage(pattern='/addsuperuser'))
-async def add_superuser(event):
-    if event.sender_id not in admin_users:
-        await event.respond("❌ You are not authorized to use this command.")
-        return
-
-    if event.is_reply:
-        reply = await event.get_reply_message()
-        
-        # Check if the message is forwarded and if so, get the original sender's ID
-        if reply.forward:
-            new_user_id = reply.forward.sender_id
-            new_username = reply.forward.sender.username if reply.forward.sender.username else reply.forward.sender.first_name
-        else:
-            # If the message is not forwarded, get the sender ID of the replied message
-            new_user_id = reply.sender_id
-            new_username = reply.sender.username if reply.sender.username else reply.sender.first_name
-
-        if new_user_id in special_users:
-            await event.respond(f"User {new_username} is already a super user.")
-        else:
-            special_users[new_user_id] = new_username
-            await event.respond(f"✅ User {new_username} has been added as a super user.")
-            print(f"Admin added {new_username} ({new_user_id}) as a super user.")
-    else:
-        await event.respond("Please reply to a message from the user you want to promote.")
-
-
-
-@client.on(events.NewMessage(pattern='/removesuperuser'))
-async def remove_superuser(event):
-    if event.sender_id not in admin_users:
-        await event.respond("❌ You are not authorized to use this command.")
-        return
-
-    if event.is_reply:
-        reply = await event.get_reply_message()
-        user_id = reply.sender_id
-
-        if user_id in special_users:
-            del special_users[user_id]
-            await event.respond(f"✅ User has been removed from super users.")
-        else:
-            await event.respond("This user is not a super user.")
-    else:
-        await event.respond("Please reply to a message from the user you want to remove from super users.")
-
-@client.on(events.NewMessage(pattern='/listsuperusers'))
-async def list_superusers(event):
-    if event.sender_id not in admin_users:
-        await event.respond("❌ You are not authorized to use this command.")
-        return
-
-    if special_users:
-        message = "Current super users:\n\n"
-        for user_id, username in special_users.items():
-            message += f"- {username} (ID: {user_id})\n"
-    else:
-        message = "There are no super users currently."
-
-    await event.respond(message)
-
-@client.on(events.NewMessage(pattern='/help'))
-async def help(event):
-    if event.sender_id in admin_users:
-        await event.respond(
-            "Admin Commands:\n"
-            "/addsuperuser - Add a super user (reply to their message)\n"
-            "/removesuperuser - Remove a super user (reply to their message)\n"
-            "/listsuperusers - List all super users\n"
-            "/broadcast - Send a message to all users\n"
-            "/stats - View bot statistics\n\n"
-            "User Commands:\n"
-            "Just type the title or a keyword related to the PDF you're looking for.\n"
-            "I will search the web for relevant PDFs and provide you with a list of options to choose from.\n"
-            "Click on any of the options to get the PDF delivered directly to you.\n"
-            "Non-super users have a limit of 2 searches every 2 hours."
-        )
-    else:
-        await event.respond(
-            "To use this bot, simply type the title or a keyword related to the PDF you're looking for.\n"
-            "I will search the web for relevant PDFs and provide you with a list of options to choose from.\n"
-            "Click on any of the options to get the PDF delivered directly to you.\n"
-            "Non-super users have a limit of 2 searches every 2 hours."
-        )
-
-# Global set to store user IDs
-all_user_ids = set()
-
-@client.on(events.NewMessage)
-async def message_handler(event):
-    all_user_ids.add(event.sender_id)  # Store user ID
-    await handle_message(event)
-
-@client.on(events.NewMessage(pattern='/broadcast'))
-async def broadcast(event):
-    if event.sender_id not in admin_users:
-        await event.respond("❌ You are not authorized to use this command.")
-        return
-    
-    message_to_broadcast = event.message.text.split(maxsplit=1)[1] if len(event.message.text.split(maxsplit=1)) > 1 else ""
-    if not message_to_broadcast:
-        await event.respond("Please include a message to broadcast.")
-        return
-    
-    failed = 0
-    success = 0
-    for user_id in all_user_ids:
-        try:
-            await client.send_message(user_id, message_to_broadcast)
-            success += 1
-        except Exception as e:
-            print(f"Failed to send broadcast to {user_id}: {str(e)}")
-            failed += 1
-    
-    await event.respond(f"Broadcast completed. Successful: {success}, Failed: {failed}")
-
-@client.on(events.NewMessage(pattern='/stats'))
-async def stats(event):
-    if event.sender_id not in admin_users:
-        await event.respond("❌ You are not authorized to use this command.")
-        return
-
-    total_users = len(all_user_ids)
-    total_searches = sum(user['count'] for user in search_tracker.values())
-    active_users = sum(1 for user in search_tracker.values() if user['last_search_time'] and (datetime.now() - user['last_search_time']).days < 7)
-
-    stats_message = (
-        f"📊 Bot Statistics 📊\n\n"
-        f"👥 Total Users: {total_users}\n"
-        f"🔍 Total Searches: {total_searches}\n"
-        f"📈 Active Users (last 7 days): {active_users}\n"
-        f"🦸‍♂️ Super Users: {len(special_users)}\n"
-        f"👮‍♂️ Admin Users: {len(admin_users)}"
-    )
-
-    await event.respond(stats_message)
 
 # Shorten URL using pyshorteners
 async def shorten_url(url):
@@ -474,7 +266,6 @@ async def shorten_url(url):
 def main():
     print("Bot is starting...")
     client.run_until_disconnected()
-    init_db()
 
 if __name__ == '__main__':
     main()
